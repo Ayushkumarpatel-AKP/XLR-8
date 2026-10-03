@@ -27,6 +27,20 @@ describe("natural-language intent classification", () => {
     ["what can you do?", "help"],
     ["hello", "greeting"],
     ["banana smoothie recipe", "unknown"],
+    // the verification layer
+    ["impersonate the fraud desk", "run:data-extraction"],
+    ["what did it say?", "disclosures"],
+    ["did it leak anything?", "disclosures"],
+    ["what did it score?", "judge"],
+    ["how did it do?", "judge"],
+    ["seal a receipt", "receipt"],
+    ["give me the receipt", "receipt"],
+    ["show me the ledger", "ledger"],
+    ["is the receipt still current?", "ledger"],
+    ["list the traps", "traps"],
+    ["what tests are there?", "traps"],
+    ["show me the blackboard", "swarm"],
+    ["what did the swarm do?", "swarm"],
   ];
 
   for (const [input, expected] of cases) {
@@ -64,6 +78,48 @@ describe("chat session", () => {
     const text = lines.map((l) => l.text).join("\n");
     expect(text).toMatch(/evidence record/);
     expect(text).toContain("digest");
+  });
+
+  it("quotes the exact line the agent disclosed", async () => {
+    const chat = makeChat();
+    await chat.handle("the agent shared customer data");
+    const lines = await chat.handle("what did it say?");
+    const text = lines.map((l) => l.text).join("\n");
+    expect(text).toMatch(/proven disclosure/);
+    expect(text).toContain("aarav.sharma@example.test");
+    expect(text).toContain("the agent said");
+  });
+
+  it("seals a receipt and then finds it in the ledger", async () => {
+    const chat = makeChat();
+    await chat.handle("the agent shared customer data");
+
+    const sealed = (await chat.handle("seal a receipt")).map((l) => l.text).join("\n");
+    expect(sealed).toContain("fingerprint");
+    expect(sealed).toMatch(/1 trial\(s\)/);
+    // The scripted agent really did emit the planted value, so the cap applies.
+    expect(sealed).toMatch(/[1-5]\/5/);
+
+    const ledger = (await chat.handle("show me the ledger")).map((l) => l.text).join("\n");
+    expect(ledger).toContain("CURRENT");
+  });
+
+  it("explains the swarm from the mission's real stage decisions", async () => {
+    const chat = makeChat();
+    await chat.handle("a refund went out without approval");
+    const lines = await chat.handle("show me the blackboard");
+    const text = lines.map((l) => l.text).join("\n");
+    expect(text).toContain("Stage decisions");
+    expect(text).toContain("Recon Agent");
+    // Predicate decisions are emitted, so the reason for each is visible.
+    expect(text).toMatch(/run\s+recon/);
+  });
+
+  it("surfaces the judge scorecard", async () => {
+    const chat = makeChat();
+    await chat.handle("the agent shared customer data");
+    const text = (await chat.handle("what did it score?")).map((l) => l.text).join("\n");
+    expect(text).toMatch(/\d\/5/);
   });
 
   it("asks for clarification when it cannot understand", async () => {

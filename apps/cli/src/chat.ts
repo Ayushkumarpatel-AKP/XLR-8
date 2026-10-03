@@ -554,7 +554,8 @@ export class ChatSession {
     const decisions = m.events.filter((e) => e.type === "agent.thought");
     if (decisions.length > 0) {
       lines.push({ text: `${decisions.length} predicate decision(s):`, kind: "info" });
-      for (const e of decisions.slice(-8)) {
+      // One per stage, so the whole list is short and worth showing in full.
+      for (const e of decisions) {
         lines.push({
           text: `  ${e.payload.run === true ? "run " : "skip"} ${String(e.payload.stage ?? "?")} — ${String(e.payload.reason ?? "")}`,
           kind: "dim",

@@ -10,7 +10,7 @@ _Discover. Test. Monitor. Secure._
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-339933.svg?logo=node.js&logoColor=white)](package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-F69220.svg?logo=pnpm&logoColor=white)](pnpm-workspace.yaml)
-[![Tests](https://img.shields.io/badge/tests-153%20passing-4fbf7a.svg)](#verify-it)
+[![Tests](https://img.shields.io/badge/tests-170%20passing-4fbf7a.svg)](#verify-it)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6.svg?logo=typescript&logoColor=white)](tsconfig.json)
 [![Receipts](https://img.shields.io/badge/receipts-Ed25519%20signed-4fbf7a.svg)](#can-you-prove-it)
 [![Demo](https://img.shields.io/badge/DEMO-SANDBOX%20%C2%B7%20NO%20REAL%20DATA-eb7d00.svg)](#-demo--sandbox--no-real-data)
@@ -279,7 +279,7 @@ Requires **Node ≥ 20** and **pnpm**. No Docker needed.
 ## Verify it
 
 ```bash
-pnpm check            # typecheck + hardcoded-data guard + 153 tests
+pnpm check            # typecheck + hardcoded-data guard + 170 tests
 pnpm verify:receipt   # real model → real leak → signed receipt → 4 verification checks
 pnpm verify:api       # the same over HTTP, including supersession
 ```
