@@ -42,7 +42,9 @@ export function Dashboard() {
   );
   const agentList = activeAgentId ? (agents.data ?? []).filter((a) => a.id === activeAgentId) : (agents.data ?? []);
   const missionIds = new Set(missions.map((m) => m.id));
-  const scopedEvents = activeAgentId ? events.filter((e) => missionIds.has(e.missionId)) : events;
+  // Always scoped to the missions we are actually reporting on, so an event from
+  // a removed agent never streams into a dashboard that does not count it.
+  const scopedEvents = events.filter((e) => missionIds.has(e.missionId));
 
   const sortedMissions = [...missions].sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
   const latest = sortedMissions.at(-1) ?? null;
@@ -66,6 +68,23 @@ export function Dashboard() {
   }
 
   if (agents.error) return <ErrorBox error={agents.error} />;
+
+  if (!agents.loading && (agents.data ?? []).length === 0) {
+    return (
+      <div className="col">
+        <PageHeader title="Security Overview" sub="No agent is registered in this workspace yet." />
+        <Card title="Import an agent to begin">
+          <p className="small dim" style={{ marginTop: 0 }}>
+            AgentGuard reads an agent's <strong>declared capability surface</strong> — its tools, permissions,
+            data classes and external destinations — and audits it without ever calling it. Import one from
+            GitHub (an OpenAPI/Swagger spec or a manifest with a <span className="mono">tools</span> array) to
+            populate this workspace with real data.
+          </p>
+          <Link className="btn primary" to="/agents">Import an agent from GitHub</Link>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="col">

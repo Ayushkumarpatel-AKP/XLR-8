@@ -63,22 +63,28 @@ function GeneralTab() {
     <div className="split">
       <Card title="Workspace">
         <dl className="kv">
-          <dt>Mode</dt>
-          <dd>{health.data?.label ?? "—"}</dd>
-          <dt>Agent runtime</dt>
-          <dd>{runtime.data?.runtimeMode === "llm" ? "MODEL-DRIVEN (real LLM)" : "offline scripted fallback"}</dd>
-          <dt>Agent under test</dt>
-          <dd>{runtime.data?.agentName ?? "—"}</dd>
+          <dt>Agents registered</dt>
+          <dd>{health.data?.agents ?? "—"}</dd>
+          <dt>Active agent</dt>
+          <dd>{runtime.data?.agentName ?? "none — import one"}</dd>
+          <dt>Origin</dt>
+          <dd>{runtime.data?.importedFrom ?? runtime.data?.sourceRef ?? "—"}</dd>
+          <dt>Can be driven</dt>
+          <dd>
+            {runtime.data?.runtimeMode === "llm"
+              ? "yes — a model-driven runtime is registered"
+              : "no — audited statically, never called"}
+          </dd>
+          <dt>Sandbox agent</dt>
+          <dd>{health.data?.demoEnabled ? `loaded (${health.data.demoAgentId})` : "not loaded"}</dd>
           <dt>MCP platforms</dt>
           <dd>{runtime.data?.platforms.join(", ") || "—"}</dd>
           <dt>Data directory</dt>
           <dd>.agentguard</dd>
-          <dt>Version</dt>
-          <dd>0.1.0</dd>
         </dl>
       </Card>
 
-      <Card title="Quick actions" sub="everything runs against the local sandbox">
+      <Card title="Quick actions" sub="traps only run where a runtime is registered">
         <div className="col" style={{ gap: 10 }}>
           <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
             <Link className="btn" to="/target">Open Agent Under Test</Link>

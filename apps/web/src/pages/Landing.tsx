@@ -1,11 +1,26 @@
 import { Link } from "react-router-dom";
 import { Badge } from "../components/ui.js";
+import { useAgents } from "../lib/agent-context.js";
 
 export function LandingPage() {
+  const { targets, active } = useAgents();
   return (
     <div className="col" style={{ gap: 22 }}>
       <section className="card" style={{ padding: 34, position: "relative", overflow: "hidden" }}>
-        <div className="badge safe" style={{ marginBottom: 14 }}>● Simulation Mode (Safe) · No real data</div>
+        {/* Claim only what is actually true of this workspace right now. */}
+        {targets.length === 0 ? (
+          <div className="badge medium" style={{ marginBottom: 14 }}>
+            ○ No agent registered — import one from GitHub
+          </div>
+        ) : active?.interactive ? (
+          <div className="badge safe" style={{ marginBottom: 14 }}>
+            ● Sandbox runtime · traps run locally, nothing external is contacted
+          </div>
+        ) : (
+          <div className="badge medium" style={{ marginBottom: 14 }}>
+            ○ Static audit · {active?.name ?? `${targets.length} agents`} is read, never called
+          </div>
+        )}
         <h1 style={{ fontSize: 40, margin: "4px 0 8px", letterSpacing: "-0.03em" }}>
           The Security Control Plane for <span style={{ color: "var(--orange)" }}>AI Agents</span>
         </h1>

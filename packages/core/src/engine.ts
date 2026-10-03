@@ -183,6 +183,19 @@ export class AgentGuardEngine {
     this.runtimes.set(agentId, runtime);
   }
 
+  /**
+   * Forget an agent. Missions already recorded keep the denormalised agent name,
+   * so history stays readable; only the registration goes.
+   */
+  removeAgent(agentId: string): boolean {
+    const existed = this.agents.delete(agentId);
+    this.runtimes.delete(agentId);
+    this.baselines.delete(agentId);
+    if (this.activeAgentId === agentId) this.setActiveAgentId(null);
+    if (existed) this.persist();
+    return existed;
+  }
+
   /** Whether this agent can actually be driven (chat / stress), or is audit-only. */
   hasRuntime(agentId: string): boolean {
     return this.runtimes.has(agentId);

@@ -16,9 +16,16 @@ function agentHue(id: string): number {
   return h;
 }
 
-function previewHost(target: AgentTarget): string {
-  const slug = target.agentId.toLowerCase().replace(/[^a-z0-9-]/g, "-").replace(/-+/g, "-");
-  return `https://${slug}.sandbox.local/app`;
+/**
+ * Where this agent actually came from. Previously this fabricated a
+ * `https://<slug>.sandbox.local/app` host, which presented invented data as the
+ * agent's endpoint. It is now the agent's real source ref, or its id when it has
+ * no recorded origin.
+ */
+function originOf(target: AgentTarget): string {
+  if (target.importedFrom) return target.importedFrom;
+  if (target.sourceRef) return target.sourceRef;
+  return target.agentId;
 }
 
 function greetingFor(target: AgentTarget): string {
@@ -52,7 +59,7 @@ export function TargetAgent({
 }) {
   const hue = agentHue(target.agentId);
   const initial = target.name.trim().charAt(0).toUpperCase() || "A";
-  const host = previewHost(target);
+  const origin = originOf(target);
 
   return (
     <div className="target-frame">
@@ -62,7 +69,10 @@ export function TargetAgent({
           <span />
           <span />
         </span>
-        <span className="target-url">{host}</span>
+        <span className="target-url" title={origin}>
+          {target.importedFrom ? "⟲ " : ""}
+          {origin}
+        </span>
         <span className={`badge ${target.interactive ? "ok" : "medium"}`}>
           {target.interactive ? "● live" : "○ audit-only"}
         </span>

@@ -20,6 +20,7 @@ const AGENT = process.env.AGENTGUARD_AGENT ?? "acmebank-assistant";
 
 const GREEN = "\x1b[32m";
 const RED = "\x1b[31m";
+const YELLOW = "\x1b[33m";
 const DIM = "\x1b[2m";
 const BOLD = "\x1b[1m";
 const OFF = "\x1b[0m";
@@ -58,8 +59,19 @@ async function main(): Promise<void> {
   console.log(`${BOLD}AgentGuard X — API verification smoke test${OFF}`);
   console.log(`${DIM}${BASE}${OFF}\n`);
 
-  const health = await get<{ ok: boolean; runtime: string }>("/health");
-  check("API is up", health.ok, `runtime: ${health.runtime}`);
+  const health = await get<{ ok: boolean; agents: number; demoEnabled: boolean; activeAgentName: string | null }>(
+    "/health",
+  );
+  check("API is up", health.ok, `${health.agents} agent(s), active: ${health.activeAgentName ?? "none"}`);
+
+  if (!health.demoEnabled) {
+    console.log(
+      `\n${YELLOW}The built-in sandbox agent is not loaded, and this smoke test drives it.` +
+        `\nStart the API with it enabled, then re-run:\n  pnpm dev --demo\n${OFF}`,
+    );
+    process.exitCode = 1;
+    return;
+  }
 
   const traps = await get<{ attackLibraryVersion: string; traps: Array<{ id: string; hasAttacker: boolean }> }>("/traps");
   check("trap library served", traps.traps.length > 0, `${traps.traps.length} traps · ${traps.attackLibraryVersion.slice(0, 18)}…`);

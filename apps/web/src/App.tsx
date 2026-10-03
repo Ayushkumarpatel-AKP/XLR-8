@@ -66,6 +66,7 @@ const NAV: Array<{ section: string; items: Array<{ to: string; label: string; ic
 ];
 
 function Sidebar() {
+  const { targets, active } = useAgents();
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -94,15 +95,23 @@ function Sidebar() {
         </div>
       ))}
       <div className="spacer" />
-      <div className="nav-section">Session</div>
+      <div className="nav-section">Workspace</div>
       <div className="nav-item" style={{ cursor: "default" }}>
-        <span className="badge safe">● Simulation Mode (Safe)</span>
+        <span className={`badge ${targets.length > 0 ? "safe" : "medium"}`}>
+          {targets.length} agent{targets.length === 1 ? "" : "s"} registered
+        </span>
       </div>
       <div className="nav-item" style={{ cursor: "default" }}>
-        <span className="badge">Demo User · Team Admin</span>
+        <span className={`badge ${active ? (active.interactive ? "ok" : "medium") : ""}`}>
+          {active ? `${active.interactive ? "●" : "○"} ${active.name}` : "no active agent"}
+        </span>
       </div>
       <div className="tiny faint" style={{ padding: "8px 10px" }}>
-        No real data is accessed.
+        {active?.interactive
+          ? "Sandbox runtime — traps execute locally against a mock agent. Nothing external is contacted."
+          : active
+            ? "Static audit only — this agent's declared surface is read, never called."
+            : "Import an agent from GitHub to begin."}
       </div>
     </aside>
   );
@@ -145,7 +154,13 @@ function Topbar() {
       </div>
       <div className="topbar-actions">
         <AgentSwitcher />
-        <span className="badge safe">● {health.data?.mode === "demo" ? "DEMO" : "SANDBOX"} / NO REAL DATA</span>
+        <span className={`badge ${active ? (active.interactive ? "safe" : "medium") : ""}`}>
+          {active
+            ? active.interactive
+              ? "● sandbox runtime"
+              : "○ static audit only"
+            : "no agent registered"}
+        </span>
         <span className="badge ok">API {health.error ? "offline" : "connected"}</span>
         <AlertBell />
       </div>
@@ -178,6 +193,7 @@ function titleFor(path: string): string {
 
 export function App() {
   const location = useLocation();
+  const { active } = useAgents();
   // Verification is deliberately public: it must not sit behind the app shell.
   if (location.pathname.startsWith("/verify/")) return <VerifyPage />;
 
@@ -186,7 +202,13 @@ export function App() {
       <Sidebar />
       <div className="main">
         <div className="main-head">
-          <div className="banner-demo">▲ Demo / Sandbox / No Real Data — all activity is local and synthetic</div>
+          <div className="banner-demo">
+            {active
+              ? active.interactive
+                ? "▲ Sandbox runtime — traps execute locally against a mock agent; nothing external is contacted"
+                : `▲ Static audit — ${active.sourceRef} is read, never called`
+              : "▲ No agent registered — import one from GitHub to begin"}
+          </div>
           <Topbar />
         </div>
         <main className="content">

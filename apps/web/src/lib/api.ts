@@ -117,13 +117,29 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => request<{ ok: boolean; label: string; mode: string; runtime: "llm" | "scripted" }>("/health"),
+  /** Real workspace state — agent count, the active agent, whether a sandbox is loaded. */
+  health: () =>
+    request<{
+      ok: boolean;
+      agents: number;
+      activeAgentId: string | null;
+      activeAgentName: string | null;
+      interactive: boolean;
+      demoEnabled: boolean;
+      demoAgentId: string | null;
+      time: string;
+    }>("/health"),
+  /** How the ACTIVE agent is driven. Nulls when nothing is registered. */
   runtime: () =>
     request<{
-      runtimeMode: "llm" | "scripted";
-      agentId: string;
-      agentName: string;
+      runtimeMode: "llm" | "none";
+      agentId: string | null;
+      agentName: string | null;
       platforms: string[];
+      model: string | null;
+      environment: string | null;
+      importedFrom: string | null;
+      sourceRef: string | null;
       providers: Array<{ id: string; model: string; tools: boolean; connected: boolean | null; latencyMs: number | null }>;
     }>("/runtime"),
   /** Talk to a specific agent; AgentGuard observes the resulting mission. */

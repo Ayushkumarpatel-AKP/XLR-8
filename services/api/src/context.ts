@@ -18,6 +18,7 @@ import { AUDIT_SCENARIO, AgentGuardEngine, classifyTools } from "@agentguard/cor
 import {
   SCENARIO_IDS,
   createDemoLab,
+  demoAgentId,
   listScenarios,
   type AgentProfile,
   type DemoLab,
@@ -38,14 +39,24 @@ import {
 export interface ApiContext {
   app: FastifyInstance;
   engine: AgentGuardEngine;
-  lab: DemoLab;
+  /** The built-in sandbox lab, present only when AGENTGUARD_DEMO=1. */
+  lab: DemoLab | null;
   start(port?: number): Promise<string>;
 }
 
 export function createApiContext(): ApiContext {
   const app = Fastify({ logger: false });
   const engine = new AgentGuardEngine({ dataDir: process.env.AGENTGUARD_DATA_DIR ?? ".agentguard" });
-  const lab = createDemoLab(engine);
+  // The demo lab is a sandbox fixture, not product data. It is registered only
+  // when explicitly asked for (AGENTGUARD_DEMO=1), so a normal install shows the
+  // agents you actually registered and nothing else.
+  const demoEnabled = process.env.AGENTGUARD_DEMO === "1";
+  const lab = demoEnabled ? createDemoLab(engine) : null;
+  const SANDBOX_OFF =
+    "No sandbox agent is registered, so there is nothing to run a trap against. Start the API with AGENTGUARD_DEMO=1 to load the built-in sandbox agent, or import an agent from GitHub and run its static audit.";
+  // The sandbox agent may still be sitting in this workspace from an earlier run.
+  // Unless the sandbox is explicitly enabled, it is not part of the workspace.
+  if (!demoEnabled && engine.getAgent(demoAgentId())) engine.removeAgent(demoAgentId());
   const alerts = new AlertService(engine);
 
   app.register(cors, { origin: true });
@@ -79,28 +90,48 @@ export function createApiContext(): ApiContext {
     sseGeneric<MissionEvent>(reply, "mission-event", handler);
 
   // ---- health & meta ------------------------------------------------------
-  app.get("/api/health", async () => ({
-    ok: true,
-    mode: process.env.AGENTGUARD_MODE ?? "local",
-    label: "DEMO / SANDBOX / NO REAL DATA",
-    runtime: lab.runtimeMode,
-    time: new Date().toISOString(),
-  }));
+  /** Real workspace state. Nothing here is a fixed label. */
+  app.get("/api/health", async () => {
+    const agents = engine.listAgents();
+    const activeId = engine.getActiveAgentId();
+    const active = activeId ? engine.getAgent(activeId) : undefined;
+    return {
+      ok: true,
+      agents: agents.length,
+      activeAgentId: activeId,
+      activeAgentName: active?.name ?? null,
+      interactive: activeId ? engine.hasRuntime(activeId) : false,
+      /** Whether the built-in sandbox agent is registered (opt-in). */
+      demoEnabled,
+      demoAgentId: lab?.agentId ?? null,
+      time: new Date().toISOString(),
+    };
+  });
 
   /** How the agent under test is currently being driven. */
-  app.get("/api/runtime", async () => ({
-    runtimeMode: lab.runtimeMode,
-    agentId: lab.agentId,
-    agentName: lab.manifest.name,
-    platforms: lab.manifest.mcpServers,
-    providers: engine.router.statuses().map((p) => ({
-      id: p.id,
-      model: p.model,
-      tools: p.tools,
-      connected: p.health?.ok ?? null,
-      latencyMs: p.health?.latencyMs ?? null,
-    })),
-  }));
+  app.get("/api/runtime", async () => {
+    const activeId = engine.getActiveAgentId();
+    const manifest = activeId ? engine.getAgent(activeId) : undefined;
+    const interactive = activeId ? engine.hasRuntime(activeId) : false;
+    return {
+      /** "llm" only when a model-driven runtime is actually registered. */
+      runtimeMode: interactive ? "llm" : "none",
+      agentId: activeId,
+      agentName: manifest?.name ?? null,
+      platforms: manifest?.mcpServers ?? [],
+      model: manifest?.model ?? null,
+      environment: manifest?.environment ?? null,
+      importedFrom: manifest?.annotations?.importedFrom ?? null,
+      sourceRef: manifest?.sourceRef ?? null,
+      providers: engine.router.statuses().map((p) => ({
+        id: p.id,
+        model: p.model,
+        tools: p.tools,
+        connected: p.health?.ok ?? null,
+        latencyMs: p.health?.latencyMs ?? null,
+      })),
+    };
+  });
 
   /**
    * Live interactive session with a *specific* agent. Agents without a runtime
@@ -109,7 +140,12 @@ export function createApiContext(): ApiContext {
   app.post("/api/session/message", async (req, reply) => {
     const body = (req.body ?? {}) as { message?: string; agentId?: string };
     const message = (body.message ?? "").trim();
-    const agentId = body.agentId ?? lab.agentId;
+    const agentId = body.agentId ?? engine.getActiveAgentId();
+    if (!agentId) {
+      return reply
+        .code(409)
+        .send({ error: "No agent is registered yet. Import one from the Agents page first." });
+    }
     if (!message) return reply.code(400).send({ error: "message is required" });
     if (message.length > 2000) return reply.code(400).send({ error: "message too long" });
     try {
@@ -155,7 +191,9 @@ export function createApiContext(): ApiContext {
       classifiedBy: a.annotations?.classifiedBy ?? null,
       interactive: engine.hasRuntime(a.id),
       mcpServers: a.mcpServers,
-      examplePrompts: a.id === lab.agentId ? listScenarios().map((s) => s.userPrompt).filter(Boolean) : [],
+      // Prompts exist only where the agent can actually be driven. Audit-only
+      // agents get none, because there is no conversation to offer.
+      examplePrompts: engine.hasRuntime(a.id) ? listScenarios().map((s) => s.userPrompt).filter(Boolean) : [],
       tools: a.tools.map((t) => ({
         name: t.name,
         description: t.description,
@@ -274,7 +312,18 @@ export function createApiContext(): ApiContext {
   );
 
   // ---- missions -----------------------------------------------------------
-  app.get("/api/missions", async () => engine.listMissions());
+  /**
+   * Posture data is scoped to the agents that are actually registered. History
+   * belonging to an agent you removed is kept on disk but is not reported as part
+   * of the current fleet — otherwise a deleted agent's findings keep inflating
+   * the dashboard.
+   */
+  const registeredIds = () => new Set(engine.listAgents().map((a) => a.id));
+
+  app.get("/api/missions", async () => {
+    const ids = registeredIds();
+    return engine.listMissions().filter((m) => ids.has(m.agentId));
+  });
   app.get("/api/missions/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const mission = engine.getMission(id);
@@ -304,9 +353,20 @@ export function createApiContext(): ApiContext {
   });
 
   // ---- findings / evidence / decisions -----------------------------------
-  app.get("/api/findings", async () => engine.listFindings());
-  app.get("/api/evidence", async () => engine.listEvidence());
-  app.get("/api/decisions", async () => engine.listDecisions());
+  app.get("/api/findings", async () => {
+    const ids = registeredIds();
+    return engine.listFindings().filter((f) => ids.has(f.agentId));
+  });
+  app.get("/api/evidence", async () => {
+    const ids = registeredIds();
+    const missionIds = new Set(engine.listMissions().filter((m) => ids.has(m.agentId)).map((m) => m.id));
+    return engine.listEvidence().filter((e) => missionIds.has(e.missionId));
+  });
+  app.get("/api/decisions", async () => {
+    const ids = registeredIds();
+    const missionIds = new Set(engine.listMissions().filter((m) => ids.has(m.agentId)).map((m) => m.id));
+    return engine.listDecisions().filter((d) => missionIds.has(d.missionId));
+  });
 
   // ---- graph / blast radius ----------------------------------------------
   app.get("/api/graph/:agentId", async (req, reply) => {
@@ -323,16 +383,18 @@ export function createApiContext(): ApiContext {
   });
 
   // ---- drift --------------------------------------------------------------
-  app.get("/api/drift", async () => {
-    const agent = engine.listAgents()[0];
-    if (!agent) return [];
-    return [engine.checkDrift(agent.id, lab.driftManifest, lab.manifest)];
+  // Diffed against the agent's OWN stored baseline. There is no canned pair.
+  app.get("/api/drift", async (req) => {
+    const q = req.query as { agentId?: string };
+    const agentId = q.agentId ?? engine.getActiveAgentId();
+    if (!agentId || !engine.getAgent(agentId)) return [];
+    return [engine.checkDrift(agentId)];
   });
   app.post("/api/drift/check", async (req, reply) => {
     const body = req.body as { agentId?: string; nextManifest?: AgentManifest };
-    const agentId = body?.agentId ?? engine.listAgents()[0]?.id;
-    if (!agentId) return reply.code(400).send({ error: "no agent" });
-    return engine.checkDrift(agentId, body?.nextManifest ?? lab.driftManifest, engine.getAgent(agentId));
+    const agentId = body?.agentId ?? engine.getActiveAgentId();
+    if (!agentId || !engine.getAgent(agentId)) return reply.code(400).send({ error: "no agent" });
+    return engine.checkDrift(agentId, body?.nextManifest, engine.getAgent(agentId));
   });
 
   // ---- policies -----------------------------------------------------------
@@ -419,6 +481,7 @@ export function createApiContext(): ApiContext {
 
   // ---- run missions -------------------------------------------------------
   app.post("/api/missions", async (req, reply) => {
+    if (!lab) return reply.code(409).send({ error: SANDBOX_OFF });
     const body = req.body as { scenarioId?: ScenarioKey; profile?: AgentProfile };
     const scenarioId = body?.scenarioId ?? "approval-bypass";
     if (!SCENARIO_IDS.includes(scenarioId)) return reply.code(400).send({ error: `unknown scenario: ${scenarioId}` });
@@ -426,7 +489,8 @@ export function createApiContext(): ApiContext {
     return reply.code(201).send(mission);
   });
 
-  app.post("/api/demo/run", async (req) => {
+  app.post("/api/demo/run", async (req, reply) => {
+    if (!lab) return reply.code(409).send({ error: SANDBOX_OFF });
     const body = (req.body ?? {}) as { scenarioId?: ScenarioKey };
     const ids: ScenarioKey[] = body.scenarioId && SCENARIO_IDS.includes(body.scenarioId) ? [body.scenarioId] : SCENARIO_IDS;
     const missions = [];
@@ -435,6 +499,7 @@ export function createApiContext(): ApiContext {
   });
 
   app.post("/api/tests/run", async (req, reply) => {
+    if (!lab) return reply.code(409).send({ error: SANDBOX_OFF });
     const body = req.body as { scenarioId?: ScenarioKey; profile?: AgentProfile };
     const scenarioId = body?.scenarioId ?? "approval-bypass";
     if (!SCENARIO_IDS.includes(scenarioId)) return reply.code(400).send({ error: `unknown scenario: ${scenarioId}` });
@@ -596,18 +661,20 @@ export function createApiContext(): ApiContext {
     const results: TrapResult[] = [];
     let executed = false;
     if (body.run) {
+      if (!lab) return reply.code(409).send({ error: SANDBOX_OFF });
       if (!engine.hasRuntime(manifest.id)) {
         return reply.code(409).send({
           error: `"${manifest.name}" has no interactive runtime, so the gate cannot execute traps. Imported agents are audited statically.`,
         });
       }
+      const sandbox = lab;
       for (const id of affectedTraps) {
         const scenario = trapLibrary.find((s) => s.id === id);
-        if (!scenario) continue;
-        const mission = await lab.runScenario(id as ScenarioKey, body.profile);
+        if (!scenario || !sandbox) continue;
+        const mission = await sandbox.runScenario(id as ScenarioKey, body.profile);
         results.push({ trapId: id, status: mission.tests[0]?.status ?? "ERROR" });
       }
-      executed = true;
+      executed = results.length > 0;
     }
 
     const gate = evaluateGate({ base: base ?? manifest, head: manifest, affectedTraps, results });
