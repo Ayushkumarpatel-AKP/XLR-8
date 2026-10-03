@@ -1,5 +1,6 @@
 import { type RiskFactor, type RiskScore, riskBand, nowIso } from "@agentguard/contracts";
 import type { RiskInputs } from "./runtime.js";
+import type { DecayedBlackboardEntry } from "./blackboard.js";
 
 const BASE = 5;
 
@@ -15,11 +16,27 @@ const SEVERITY_WEIGHT: Record<string, number> = {
  * Deterministic risk arithmetic. The same inputs always yield the same score —
  * this is what makes "risk fell by N" a defensible claim, not an LLM guess.
  */
-export function computeRisk(inputs: RiskInputs, previousScore: number | null = null): RiskScore {
+export function computeRisk(
+  inputs: RiskInputs,
+  previousScore: number | null = null,
+  boardEntries?: ReadonlyArray<DecayedBlackboardEntry>,
+): RiskScore {
   const factors: RiskFactor[] = [];
   const add = (id: string, label: string, weight: number, contribution: number, detail = "") => {
     if (contribution === 0) return;
     factors.push({ id, label, weight, contribution, detail });
+  };
+
+  /**
+   * Summed decayed weights on the blackboard for the given kinds. Optional:
+   * with no board supplied every nudge is 0, so the arithmetic is byte-identical
+   * to the board-less computation.
+   */
+  const boardNudge = (kinds: ReadonlyArray<DecayedBlackboardEntry["kind"]>, scale: number): number => {
+    if (!boardEntries || boardEntries.length === 0) return 0;
+    let sum = 0;
+    for (const e of boardEntries) if (kinds.includes(e.kind)) sum += e.effectiveWeight;
+    return Math.round(sum * scale);
   };
 
   add("base", "Baseline exposure", 1, BASE, "Every registered agent carries baseline risk.");
@@ -38,7 +55,13 @@ export function computeRisk(inputs: RiskInputs, previousScore: number | null = n
     if (c > 0) capDetail.push(`${tool.name} (+${c})`);
     capContribution += c;
   }
-  add("capability_surface", "Capability surface", 1, Math.min(capContribution, 28), capDetail.join(", "));
+  add(
+    "capability_surface",
+    "Capability surface",
+    1,
+    Math.min(capContribution + boardNudge(["capability"], 2), 28),
+    capDetail.join(", "),
+  );
 
   let decisionContribution = 0;
   for (const d of inputs.decisions) {
@@ -50,7 +73,7 @@ export function computeRisk(inputs: RiskInputs, previousScore: number | null = n
     "policy_exposure",
     "Policy exposure",
     1,
-    Math.min(decisionContribution, 15),
+    Math.min(decisionContribution + boardNudge(["policy", "violation"], 2), 15),
     `${inputs.decisions.length} policy decision(s) evaluated.`,
   );
 
@@ -63,7 +86,7 @@ export function computeRisk(inputs: RiskInputs, previousScore: number | null = n
     "findings",
     "Open findings",
     1,
-    Math.min(findingContribution, 30),
+    Math.min(findingContribution + boardNudge(["violation", "chain", "disclosure", "hypothesis"], 2), 30),
     `${inputs.findings.filter((f) => f.status !== "mitigated").length} open finding(s).`,
   );
 
@@ -88,7 +111,7 @@ export function computeRisk(inputs: RiskInputs, previousScore: number | null = n
       "drift",
       "Posture drift",
       1,
-      Math.max(-12, Math.min(12, Math.round(inputs.drift.riskDelta / 3))),
+      Math.max(-12, Math.min(12, Math.round(inputs.drift.riskDelta / 3) + boardNudge(["drift"], 2))),
       inputs.drift.summary,
     );
   }

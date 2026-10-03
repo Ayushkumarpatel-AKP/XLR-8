@@ -4,6 +4,7 @@ import type { Mission, MissionEvent } from "@agentguard/contracts";
 import { api, useApi, useMissionStream } from "../lib/api.js";
 import { Badge, Card, Empty, ErrorBox, EventConsole, Loading, PageHeader, RiskDial, SwarmPanel } from "../components/ui.js";
 import { TargetAgent } from "../components/TargetAgent.js";
+import { LeakMonitor } from "../components/LeakMonitor.js";
 import { EvidenceStrip, FindingVisual, RiskBars, ToolFlow } from "../components/visuals.js";
 import { useAgents } from "../lib/agent-context.js";
 import { fmtTime, shortId } from "../lib/format.js";
@@ -59,6 +60,7 @@ export function WarRoom() {
     () => (mission?.agentId ? api.blastRadius(mission.agentId) : Promise.resolve(null)),
     [mission?.agentId],
   );
+  const traps = useApi(() => api.traps(), []);
 
   // Opening a *specific* mission adopts its agent. "latest" must NOT touch,
   // otherwise the room would override the agent chosen in the top bar (or by
@@ -81,6 +83,11 @@ export function WarRoom() {
   const toolFlow = useMemo(() => deriveToolFlow(liveEvents), [liveEvents]);
   const criticalFinding = mission?.findings.find((f) => f.severity === "critical") ?? mission?.findings[0] ?? null;
   const isSession = mission?.scenarioId === "chat";
+
+  // Leak monitor is fed only from data already on the page. With no test or no
+  // matching scenario it gets nulls and renders its own empty state.
+  const test = mission?.tests[0] ?? null;
+  const activeTrap = traps.data?.traps.find((t) => t.id === mission?.scenarioId) ?? null;
 
   function handleNewMission(m: Mission): void {
     navigate(`/war-room/${m.id}`, { replace: true });
@@ -129,6 +136,12 @@ export function WarRoom() {
               <Link className="btn sm" to={`/agents/${mission.agentId}`}>Agent →</Link>
             </div>
           )}
+          <LeakMonitor
+            trap={activeTrap ? { canaries: activeTrap.canaries } : null}
+            hits={test?.canaryHits ?? null}
+            turns={test?.redteam?.turns ?? null}
+            height={220}
+          />
         </div>
 
         {/* ---------------- right: mission control ---------------- */}

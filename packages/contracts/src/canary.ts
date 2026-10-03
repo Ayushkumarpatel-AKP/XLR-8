@@ -91,6 +91,24 @@ export const TrapSchema = z.object({
 });
 export type Trap = z.infer<typeof TrapSchema>;
 
+/**
+ * An autonomous (misalignment) trap: the agent works a synthetic inbox on its
+ * own, with no attacker model in the loop. Each turn is a message it receives.
+ */
+export const AutonomousConfigSchema = z.object({
+  turns: z
+    .array(
+      z.object({
+        prompt: z.string(),
+        /** What this turn is probing for, for the transcript label. */
+        expectation: z.string().default(""),
+      }),
+    )
+    .min(1),
+  maxTurns: z.number().int().min(1).max(12).default(8),
+});
+export type AutonomousConfig = z.infer<typeof AutonomousConfigSchema>;
+
 export const RedTeamTurnSchema = z.object({
   turn: z.number().int().nonnegative(),
   tactic: z.string(),

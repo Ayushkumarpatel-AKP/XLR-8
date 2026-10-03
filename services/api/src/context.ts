@@ -28,7 +28,16 @@ import {
   type ScenarioKey,
 } from "@agentguard/demo-lab";
 import { ingestedToManifest, ingestFromGitHub } from "@agentguard/mcp";
+import { toSarif } from "@agentguard/sarif";
 import { AlertService, type NotificationSettings } from "./alerts.js";
+import {
+  PR_GATE_MARKER,
+  buildCheckRunPayload,
+  evaluateGate,
+  formatPrComment,
+  newCapabilitiesBetween,
+  type TrapResult,
+} from "./pr-gate.js";
 
 export interface ApiContext {
   app: FastifyInstance;
@@ -466,6 +475,12 @@ export function createApiContext(): ApiContext {
   // ---- receipts + freshness ledger ----------------------------------------
   const ledger = createFileLedger(join(process.env.AGENTGUARD_DATA_DIR ?? ".agentguard", "ledger.jsonl"));
 
+  /** The agent a request is about: an explicit id, else the shared active agent. */
+  const activeManifest = (agentId?: string): AgentManifest | undefined =>
+    (agentId ? engine.getAgent(agentId) : undefined) ??
+    engine.listAgents().find((a) => a.id === engine.getActiveAgentId()) ??
+    engine.listAgents()[0];
+
   app.get("/api/ledger/:identity", async (req) => {
     const { identity } = req.params as { identity: string };
     return {
@@ -479,10 +494,7 @@ export function createApiContext(): ApiContext {
     const body = (req.body ?? {}) as { agentId?: string; missionId?: string; repeat?: number };
     const repeat = Math.max(1, Math.min(20, Number(body.repeat ?? 1) || 1));
 
-    const manifest =
-      (body.agentId ? engine.getAgent(body.agentId) : undefined) ??
-      engine.listAgents().find((a) => a.id === engine.getActiveAgentId()) ??
-      engine.listAgents()[0];
+    const manifest = activeManifest(body.agentId);
     if (!manifest) return reply.code(404).send({ error: "no agent is registered" });
 
     const scenario = trapLibrary.find((s) => s.judgeDimensions && s.judgeDimensions.length > 0) ?? trapLibrary[0]!;
@@ -592,6 +604,98 @@ export function createApiContext(): ApiContext {
     ledger.advance({ identity, fingerprint, issuedAt: receipt.issuedAt });
 
     return reply.code(201).send({ receipt, encoded: encodeReceipt(receipt) });
+  });
+
+  // ---- CI integration: SARIF export + PR gate -----------------------------
+  const trapsMatchingCapabilities = (newCapabilities: string[]): string[] =>
+    newCapabilities.length === 0
+      ? trapLibrary.map((s) => s.id)
+      : trapLibrary
+          .filter((s) => s.expectedTools.some((t) => newCapabilities.includes(t)))
+          .map((s) => s.id);
+
+  /** SARIF 2.1.0 export of a mission's findings, for GitHub code scanning. */
+  app.get("/api/sarif", async (req, reply) => {
+    const q = req.query as { missionId?: string };
+    const mission = q.missionId ? engine.getMission(q.missionId) : engine.listMissions()[0];
+    if (!mission) return reply.code(404).send({ error: "no mission yet — run one first" });
+    const manifest = engine.getAgent(mission.agentId);
+    return toSarif({
+      findings: mission.findings,
+      agentId: mission.agentId,
+      agentName: mission.agentName,
+      sourceRef: manifest?.sourceRef ?? "",
+      missionId: mission.id,
+    });
+  });
+
+  /** Read-only preview of the gate for the active agent (nothing is executed). */
+  app.get("/api/pr-check", async (req, reply) => {
+    const q = req.query as { agentId?: string; baseAgentId?: string };
+    const manifest = activeManifest(q.agentId);
+    if (!manifest) return reply.code(404).send({ error: "no agent is registered" });
+
+    const base = q.baseAgentId ? engine.getAgent(q.baseAgentId) : undefined;
+    const newCapabilities = base ? newCapabilitiesBetween(base, manifest) : [];
+    const affectedTraps = trapsMatchingCapabilities(newCapabilities);
+    const gate = evaluateGate({ base: base ?? manifest, head: manifest, affectedTraps, results: [] });
+
+    return {
+      gate,
+      marker: PR_GATE_MARKER,
+      comment: formatPrComment(manifest.name, gate),
+      checkRun: buildCheckRunPayload(gate),
+      executed: false,
+      note: "Dry run — no trap was executed. POST with run:true to execute the affected traps.",
+    };
+  });
+
+  app.post("/api/pr-check", async (req, reply) => {
+    const body = (req.body ?? {}) as {
+      agentId?: string;
+      baseAgentId?: string;
+      trapIds?: string[];
+      run?: boolean;
+      profile?: AgentProfile;
+    };
+    const manifest = activeManifest(body.agentId);
+    if (!manifest) return reply.code(404).send({ error: "no agent is registered" });
+
+    const base = body.baseAgentId ? engine.getAgent(body.baseAgentId) : undefined;
+    const newCapabilities = base ? newCapabilitiesBetween(base, manifest) : [];
+    const affectedTraps =
+      body.trapIds && body.trapIds.length > 0
+        ? body.trapIds.filter((id) => SCENARIO_IDS.includes(id as ScenarioKey))
+        : trapsMatchingCapabilities(newCapabilities);
+
+    const results: TrapResult[] = [];
+    let executed = false;
+    if (body.run) {
+      if (!engine.hasRuntime(manifest.id)) {
+        return reply.code(409).send({
+          error: `"${manifest.name}" has no interactive runtime, so the gate cannot execute traps. Imported agents are audited statically.`,
+        });
+      }
+      for (const id of affectedTraps) {
+        const scenario = trapLibrary.find((s) => s.id === id);
+        if (!scenario) continue;
+        const mission = await lab.runScenario(id as ScenarioKey, body.profile);
+        results.push({ trapId: id, status: mission.tests[0]?.status ?? "ERROR" });
+      }
+      executed = true;
+    }
+
+    const gate = evaluateGate({ base: base ?? manifest, head: manifest, affectedTraps, results });
+    return {
+      gate,
+      marker: PR_GATE_MARKER,
+      comment: formatPrComment(manifest.name, gate),
+      checkRun: buildCheckRunPayload(gate),
+      executed,
+      note: executed
+        ? `Executed ${results.length} affected trap(s) in the local sandbox.`
+        : "Dry run — no trap was executed. Pass run:true to execute them.",
+    };
   });
 
   return {

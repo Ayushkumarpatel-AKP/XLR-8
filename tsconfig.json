@@ -23,6 +23,7 @@
       "@agentguard/evidence": ["packages/evidence/src/index.ts"],
       "@agentguard/receipt": ["packages/receipt/src/index.ts"],
       "@agentguard/receipt/shared": ["packages/receipt/src/shared.ts"],
+      "@agentguard/sarif": ["packages/sarif/src/index.ts"],
       "@agentguard/graph": ["packages/graph/src/index.ts"],
       "@agentguard/drift": ["packages/drift/src/index.ts"],
       "@agentguard/mcp": ["packages/mcp/src/index.ts"],

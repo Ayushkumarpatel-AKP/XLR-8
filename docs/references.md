@@ -43,17 +43,37 @@ confidence bound, and every integration into this codebase.
   `key_note: "demo key, not KMS"` line on every receipt.
 - Re-derivable claims: a headline number that anyone can recompute →
   `pnpm verify:receipt` / `pnpm verify:api`.
+- Machine-readable findings export for a CI gate (SARIF) → `@agentguard/sarif` and
+  `POST /api/pr-check`; a failing trap produces `conclusion: "failure"`, which is
+  what a check-run would block a merge on.
+- Honest feature status rather than an implied "all shipped" → the README states
+  what is implemented and what is not.
 
 ## Pentest Swarm AI — https://github.com/Armur-Ai/Pentest-Swarm-AI (AGPL-3.0)
 
 **Ideas studied / adapted (concepts only, no code):**
-- Independent specialist agents + a shared blackboard → swarm agents + shared event bus.
-- Event-driven agent activation → agents react to typed evidence events.
-- Pheromone-style weighting with decay, and trigger predicates per agent →
-  **planned (Phase 2)**, not yet implemented. Today the pipeline order is still
-  fixed; this is the largest known gap and is stated as such in the README.
+- Independent specialist agents + a shared blackboard → `Blackboard`
+  (`packages/core/src/blackboard.ts`) plus the shared event bus.
+- Pheromone-style weighting with decay → per-kind half-lives; an entry's effective
+  weight is `weight × 0.5^(ageSec / halfLifeSec)`, so an urgent violation fades in
+  minutes while a discovered capability lingers for an hour.
+- Trigger predicates per agent → `SWARM_STAGES`: each stage declares
+  `predicate(board, ctx) -> { run, reason }`, and a stage that declines is marked
+  `skipped` with the reason. The pipeline is no longer a fixed sequence of blocks.
+- Emergent chains → a stage reads what an earlier stage posted. Concretely, the
+  exfiltration-chain check only runs when a sensitive-read capability and an
+  external-write capability were both posted to the board.
 - Scope enforcement at the tool layer → deterministic policy boundary.
 - Evidence-backed findings → findings require at least one evidence record.
+
+**Deliberately not adopted:** the reference's Postgres/pgvector blackboard. This
+project keeps a single-process, in-memory board with JSON persistence, because
+the reproduction value comes from the coordination shape rather than the storage
+engine. Noted here so the divergence is explicit rather than accidental.
+
+**Independently implemented:** the board and its decay function, the stage
+registry and predicates, the `agent.thought` decision stream, and every posting
+site in the engine.
 
 ## License posture
 

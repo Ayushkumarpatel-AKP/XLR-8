@@ -15,6 +15,7 @@ import { SettingsPage } from "./pages/Settings.js";
 import { LandingPage } from "./pages/Landing.js";
 import { ReceiptsPage } from "./pages/Receipts.js";
 import { VerifyPage } from "./pages/Verify.js";
+import { ThreatModelPage } from "./pages/ThreatModel.js";
 import { AlertBell } from "./components/AlertBell.js";
 import { agentLabel, useAgents } from "./lib/agent-context.js";
 import { useApi, api } from "./lib/api.js";
@@ -39,6 +40,7 @@ const NAV: Array<{ section: string; items: Array<{ to: string; label: string; ic
   {
     section: "Security",
     items: [
+      { to: "/threat-model", label: "Threat Model", icon: "☢" },
       { to: "/findings", label: "Findings", icon: "⚑" },
       { to: "/drift", label: "Permission Drift", icon: "⇅" },
       { to: "/graph", label: "Trust Graph", icon: "◈" },
@@ -157,6 +159,7 @@ function titleFor(path: string): string {
     "/dashboard": "Security Overview",
     "/agents": "Agent Inventory",
     "/tools": "Tool Monitoring",
+    "/threat-model": "Threat Model — Incidents Behind the Traps",
     "/findings": "Findings Center",
     "/drift": "Permission Drift",
     "/graph": "Trust & Capability Graph",
@@ -196,6 +199,7 @@ export function App() {
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/agents/:id" element={<AgentDetail />} />
             <Route path="/tools" element={<ToolsPage />} />
+            <Route path="/threat-model" element={<ThreatModelPage />} />
             <Route path="/findings" element={<FindingsPage />} />
             <Route path="/drift" element={<DriftPage />} />
             <Route path="/graph" element={<GraphPage />} />

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ScenarioId } from "@agentguard/contracts";
-import { AgentGuardEngine } from "@agentguard/core";
+import { AUDIT_SCENARIO, AgentGuardEngine } from "@agentguard/core";
 import { createDemoLab } from "@agentguard/demo-lab";
 
 function fresh() {
@@ -80,6 +80,31 @@ describe("AgentGuard engine — end-to-end invariants", () => {
   it("detects a tool-chain exfiltration path", async () => {
     const m = await fresh().lab.runScenario("tool-chain");
     expect(m.findings.some((f) => f.category === "tool-chain")).toBe(true);
+  });
+
+  it("audits without executing, and says so in the swarm", async () => {
+    const { engine } = fresh();
+    const manifest = engine.listAgents()[0]!;
+    const mission = await engine.runMission({ agentId: manifest.id, scenario: AUDIT_SCENARIO, mode: "audit" });
+
+    expect(mission.status).toBe("completed");
+    // An audit ran nothing, so there is no test result to report — inventing one
+    // would be the same lie as calling an unexecuted agent "tested".
+    expect(mission.tests).toHaveLength(0);
+    const stress = mission.swarm.find((s) => s.id === "stress");
+    const judge = mission.swarm.find((s) => s.id === "judge");
+    expect(stress?.state).toBe("skipped");
+    expect(judge?.state).toBe("skipped");
+    // The declared surface still produces findings; that is the point of an audit.
+    expect(mission.findings.length).toBeGreaterThan(0);
+  });
+
+  it("emits the stage-decision telemetry the War Room reads", async () => {
+    const { lab } = fresh();
+    const mission = await lab.runScenario("approval-bypass");
+    const thoughts = mission.events.filter((e) => e.type === "agent.thought");
+    expect(thoughts.length).toBeGreaterThan(0);
+    expect(thoughts.every((e) => typeof e.payload.stage === "string")).toBe(true);
   });
 
   it("records a policy decision for every tool the agent invoked", async () => {

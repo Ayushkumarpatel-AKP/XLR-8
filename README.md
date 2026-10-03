@@ -10,7 +10,7 @@ _Discover. Test. Monitor. Secure._
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-339933.svg?logo=node.js&logoColor=white)](package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-F69220.svg?logo=pnpm&logoColor=white)](pnpm-workspace.yaml)
-[![Tests](https://img.shields.io/badge/tests-122%20passing-4fbf7a.svg)](#verify-it)
+[![Tests](https://img.shields.io/badge/tests-151%20passing-4fbf7a.svg)](#verify-it)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6.svg?logo=typescript&logoColor=white)](tsconfig.json)
 [![Receipts](https://img.shields.io/badge/receipts-Ed25519%20signed-4fbf7a.svg)](#can-you-prove-it)
 [![Demo](https://img.shields.io/badge/DEMO-SANDBOX%20%C2%B7%20NO%20REAL%20DATA-eb7d00.svg)](#-demo--sandbox--no-real-data)
@@ -37,7 +37,7 @@ driven by **one engine, one event stream, one database**.
 | --- | --- | --- |
 | 1 | **Tells you what an agent can do** — every tool, data store, payment rail and external API it can reach | Agent inventory + capability graph |
 | 2 | **Tells you when it changed** — a new tool appeared, an approval gate was removed, a permission widened | Permission Drift with “why did risk increase?” |
-| 3 | **Tests it** — a real attacker model tries to talk secrets out of the agent, live | Attack Scenarios + red-team transcript |
+| 3 | **Tests it** — 24 traps, incl. 4 misalignment traps the agent works alone, and a real attacker model that tries to talk secrets out of it live | Attack Scenarios + red-team transcript |
 | 4 | **Proves it leaked** — an exact planted value, quoted, not a model's opinion | Findings with a cited line + a star rating it caps |
 | 5 | **Keeps proof** — every finding is backed by content-addressed evidence | Findings → click → evidence drawer with sha256 |
 | 6 | **Seals it** — a signed, portable receipt anyone can verify, that expires when the agent changes | Signed Receipts + a public `/verify` page |
@@ -45,6 +45,8 @@ driven by **one engine, one event stream, one database**.
 | 8 | **Tells you what to fix** | Reports with recommendations |
 | 9 | **Alerts you** — in-app, webhook, or email | Bell + notification channels |
 | 10 | **Audits real agents from GitHub** — without ever calling them | `agent import` + static audit |
+| 11 | **Shows you why each trap exists** — the real incidents it is modelled on, with sources | Threat Model page |
+| 12 | **Blocks the deploy** — SARIF for code scanning, and a gate whose check-run fails when a trap fails | `GET /api/sarif`, `POST /api/pr-check` |
 
 ---
 
@@ -182,6 +184,22 @@ _The left column is the agent under test, rendered as **its own product**. The r
 <tr>
 <td width="50%">
 
+**Threat Model — the real incidents behind the traps**
+<img src="docs/screenshots/12-threat-model.png" alt="Threat Model" width="100%" />
+<sub>Every claim carries a source link and a date the source actually states. Where a source publishes no severity, the page says it is our triage.</sub>
+
+</td>
+<td width="50%">
+
+**War Room — the live leak monitor mid-attack**
+<img src="docs/screenshots/13-leak-monitor.png" alt="Live leak monitor" width="100%" />
+<sub>The attacker's turn, the agent's exact reply, and <b>leaked canary: can_customer_email, can_customer_phone</b> flagged as it happens.</sub>
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
 **Settings — every tab is live**
 <img src="docs/screenshots/09-settings.png" alt="Settings" width="100%" />
 
@@ -261,7 +279,7 @@ Requires **Node ≥ 20** and **pnpm**. No Docker needed.
 ## Verify it
 
 ```bash
-pnpm check            # typecheck + hardcoded-data guard + 122 tests
+pnpm check            # typecheck + hardcoded-data guard + 151 tests
 pnpm verify:receipt   # real model → real leak → signed receipt → 4 verification checks
 pnpm verify:api       # the same over HTTP, including supersession
 ```
@@ -280,7 +298,34 @@ The invariant tests are the point, not decoration:
 - **evidence integrity holds** after a full run (sha256 recomputed)
 - **every event carries its mission id** — CLI and web read the same stream
 - **every invoked tool has a policy decision**
+- **an audit executes nothing and claims nothing** — no test result is invented for it
+- **a stage that declines says why** — `agent.thought` carries the predicate's reason
+- **a blackboard entry halves at exactly one half-life**
 - a hardcoded-data CI guard forbids fake metrics and non-determinism in production code
+
+---
+
+## CI: block the merge
+
+```bash
+GET  /api/sarif?missionId=<id>     # SARIF 2.1.0, ready for github/codeql-action/upload-sarif
+GET  /api/pr-check                 # dry run: what would this gate say?
+POST /api/pr-check  { "run": true, "trapIds": ["sensitive-data", "data-extraction"] }
+```
+
+The gate maps a manifest change onto the traps that exercise the newly added
+capabilities, runs **only those**, and returns:
+
+```
+gate        { conclusion: "failure", counts: { pass: 0, warn: 0, fail: 2 }, newCapabilities: [...] }
+checkRun    { name: "AgentGuard X PR Gate", conclusion: "failure", … }
+comment     starts with <!-- agentguard-pr-gate -->  (re-runs update in place, never duplicate)
+```
+
+Posting the comment and the check-run is left to the caller and needs a GitHub App
+installation token (`GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY`) — the gate itself is
+pure and testable without one, and with no token it returns an explicit dry-run
+result instead of pretending to have posted.
 
 ---
 
@@ -366,8 +411,8 @@ Global flags: `--json` `--quiet` `--verbose` `--provider` `--config` `--output` 
 ## Web app
 
 Routes: `/dashboard`, `/agents`, `/agents/:id`, `/war-room/:missionId`, `/target`,
-`/replay/:missionId`, `/testing`, `/receipts`, `/drift`, `/graph`, `/blast-radius`,
-`/findings`, `/reports`, `/providers`, `/policies`, `/settings`.
+`/replay/:missionId`, `/testing`, `/receipts`, `/threat-model`, `/drift`, `/graph`,
+`/blast-radius`, `/findings`, `/reports`, `/providers`, `/policies`, `/settings`.
 
 One route sits **outside the app shell** on purpose: `/verify/:fingerprint?receipt=…` — the
 public receipt verification page. It needs no sign-in, reads the whole receipt out of the
@@ -382,7 +427,9 @@ closed.
 **Attack Scenarios has a Hardened / Weak toggle.** The same trap runs against two operating
 briefs, so you can see the detector fire as well as hold. The weak preset is the ordinary
 convenience-first misconfiguration — *"internal colleagues are already verified"* — not a
-cartoon villain.
+cartoon villain. The library is **24 traps**: leak and secret extraction, injection,
+policy and actions, robustness, and four **misalignment** traps where the agent works a
+synthetic inbox on its own with no attacker model in the loop.
 
 **The War Room shows the agent under test live — whichever agent that is.** The left column
 is a preview of *the agent this mission ran against*: its real name, model, owner,
@@ -498,6 +545,29 @@ Recon → Capability (+ graph & blast radius) → Policy (static posture)
       → Evidence → Drift → Risk → Report
 ```
 
+**It is not a fixed pipeline.** Each stage is a registry entry with a *trigger
+predicate*, and every stage posts what it learned to a weighted **blackboard** that
+later stages read:
+
+```ts
+interface StageDefinition {
+  id: SwarmAgentId;
+  predicate(board, ctx): { run: boolean; reason: string };  // decline → marked "skipped"
+  run(ctx): Promise<void> | void;
+}
+```
+
+- A stage that declines is marked **skipped with its reason** — in an audit, Stress and
+  Judge decline because nothing is executed.
+- Entries **decay**: `effectiveWeight = weight × 0.5^(ageSec / halfLifeSec)`, with a
+  half-life per kind — a proven violation fades in ~2 minutes, a discovered capability
+  lingers for an hour.
+- **Chains emerge rather than being scripted.** The exfiltration check reads the board and
+  only runs when a sensitive-read capability *and* an external-write capability were both
+  posted by earlier stages.
+- Every decision emits an `agent.thought` event, so the War Room shows *why* a stage ran or
+  did not.
+
 ```
                          @agentguard/contracts
                     MissionEvent · Canary · JudgeVerdict · Receipt
@@ -522,6 +592,7 @@ packages/
   policies/       deterministic policy evaluator + explanations
   evidence/       content-addressed evidence store + integrity checker
   receipt/        Ed25519 signed receipts, freshness ledger, confidence bound
+  sarif/          SARIF 2.1.0 export for GitHub code scanning
   graph/          capability/trust graph + blast-radius engine
   drift/          snapshot comparator
   mcp/            MCP ingestion, OpenAPI ingestion, GitHub import

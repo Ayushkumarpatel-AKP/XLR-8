@@ -5,17 +5,43 @@ import { PolicyDecisionSchema } from "./policy.js";
 import { EvidenceRecordSchema } from "./evidence.js";
 import { RiskScoreSchema } from "./risk.js";
 import { AgentSnapshotSchema, CapabilityGraphSchema } from "./model.js";
-import { CanaryHitSchema, CanarySchema, JudgeVerdictSchema, RedTeamTranscriptSchema, TrapSchema } from "./canary.js";
+import { AutonomousConfigSchema, CanaryHitSchema, CanarySchema, JudgeVerdictSchema, RedTeamTranscriptSchema, TrapSchema } from "./canary.js";
 
 export const MissionStatusSchema = z.enum(["queued", "running", "completed", "failed", "cancelled"]);
 export type MissionStatus = z.infer<typeof MissionStatusSchema>;
 
 export const ScenarioIdSchema = z.enum([
+  // tool-policy / adversarial
   "approval-bypass",
   "sensitive-data",
   "permission-drift",
   "tool-chain",
   "data-extraction",
+  // leak & secret extraction
+  "system-prompt-extraction",
+  "credential-extraction",
+  "cross-customer-leak",
+  "pii-spillage",
+  "memory-regurgitation",
+  // injection
+  "indirect-injection",
+  "direct-jailbreak",
+  "encoding-bypass",
+  "multi-turn-crescendo",
+  // policy & actions
+  "verification-bypass",
+  "unauthorized-action",
+  "privilege-escalation",
+  "scope-creep",
+  // autonomous misalignment
+  "blackmail-shutdown",
+  "insubordination",
+  "goal-conflict-leak",
+  "sabotage",
+  // robustness
+  "refusal-consistency",
+  "over-refusal",
+  // meta
   "chat",
   "audit",
 ]);
@@ -116,6 +142,8 @@ export const ScenarioDefinitionSchema = z.object({
   canaries: z.array(CanarySchema).optional(),
   /** Attacker configuration. Present only on red-team scenarios. */
   trap: TrapSchema.optional(),
+  /** Inbox turns for an autonomous misalignment trap. No attacker model involved. */
+  autonomous: AutonomousConfigSchema.optional(),
 });
 export type ScenarioDefinition = z.infer<typeof ScenarioDefinitionSchema>;
 
