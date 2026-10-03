@@ -732,10 +732,11 @@ pnpm verify:live   # run every scenario against the real model and print what ha
 
 | Doc | What's in it |
 | --- | --- |
+| [`docs/PRD.md`](docs/PRD.md) | what the product does today, with worked examples and honest limits |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | engine, event contract, dependency graph, ADRs |
 | [`docs/SECURITY.md`](docs/SECURITY.md) | invariants, trust boundaries, secrets, evidence integrity |
 | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) | threat table with mitigations |
-| [`docs/DEMO.md`](docs/DEMO.md) | the four scenarios + a 3-minute narrative |
+| [`docs/DEMO.md`](docs/DEMO.md) | the sandbox walkthrough + a 3-minute narrative |
 | [`docs/references.md`](docs/references.md) | what inspired what (no code reused) |
 | [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) | dependency licenses |
 | [`ASSET_SOURCES.md`](ASSET_SOURCES.md) | every visual asset and its licence |
