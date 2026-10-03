@@ -3,11 +3,13 @@ import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import type {
   AgentManifest,
+  AgentRuntimeConfig,
+  Canary,
   Mission,
   MissionEvent,
   PolicyRule,
 } from "@agentguard/contracts";
-import { digestSnapshot, nowIso } from "@agentguard/contracts";
+import { AgentRuntimeConfigSchema, CanarySchema, digestSnapshot, nowIso } from "@agentguard/contracts";
 import {
   attackLibraryVersionOf,
   createFileLedger,
@@ -252,6 +254,10 @@ export function createApiContext(): ApiContext {
       name?: string;
       maxTools?: number;
       classify?: boolean;
+      /** Optionally configure how the agent will be driven, at import time. */
+      runtime?: unknown;
+      /** Values this agent's own sandbox holds, for deterministic scanning. */
+      canaries?: unknown;
     };
     if (!body.repo) return reply.code(400).send({ error: 'repo is required, e.g. "owner/name"' });
 
@@ -271,9 +277,17 @@ export function createApiContext(): ApiContext {
         if (c.classified > 0) classifiedBy = `${c.providerId} (${c.classified} tools)`;
       }
 
+      // A runtime config is optional at import time; without one the agent stays
+      // audit-only, which is the honest default for a repo we have not connected.
+      const runtime = body.runtime != null ? AgentRuntimeConfigSchema.safeParse(body.runtime) : null;
+      if (runtime && !runtime.success) {
+        return reply.code(400).send({ error: "invalid runtime config in import body" });
+      }
+
       const manifest = ingestedToManifest(result, {
         tools,
         ...(body.name ? { name: body.name } : {}),
+        ...(runtime?.success ? { runtime: runtime.data } : {}),
         annotations: {
           importedFrom: result.sourceRef,
           importedAt: nowIso(),
@@ -293,6 +307,67 @@ export function createApiContext(): ApiContext {
     if (!engine.getAgent(id)) return reply.code(404).send({ error: "unknown agent" });
     const mission = await engine.runMission({ agentId: id, scenario: AUDIT_SCENARIO, mode: "audit" });
     return reply.code(201).send(mission);
+  });
+
+  /**
+   * Set — or clear — how an agent is driven, plus the values its own sandbox
+   * really holds. Storing a runtime is what turns an audited agent into one the
+   * traps can run against, and it is the only way a runtime config enters the
+   * system.
+   */
+  app.post("/api/agents/:id/runtime", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const existing = engine.getAgent(id);
+    if (!existing) return reply.code(404).send({ error: "unknown agent" });
+
+    const body = (req.body ?? {}) as {
+      runtime?: unknown;
+      canaries?: unknown;
+    };
+
+    // Validate here rather than discovering a bad shape halfway through a run.
+    let runtime: AgentRuntimeConfig | undefined;
+    if (body.runtime != null) {
+      const parsed = AgentRuntimeConfigSchema.safeParse(body.runtime);
+      if (!parsed.success) {
+        const issue = parsed.error.issues[0];
+        return reply
+          .code(400)
+          .send({ error: `invalid runtime config: ${issue ? `${issue.path.join(".")} ${issue.message}` : "bad shape"}` });
+      }
+      runtime = parsed.data;
+    }
+
+    let canaries: Canary[] | undefined;
+    if (body.canaries != null) {
+      if (!Array.isArray(body.canaries)) return reply.code(400).send({ error: "canaries must be an array" });
+      const out: Canary[] = [];
+      for (const entry of body.canaries) {
+        const parsed = CanarySchema.safeParse(entry);
+        if (!parsed.success) {
+          return reply
+            .code(400)
+            .send({ error: "invalid canary: label, value, severity and dimension are all required" });
+        }
+        out.push(parsed.data);
+      }
+      canaries = out;
+    }
+
+    const updated: AgentManifest = {
+      ...existing,
+      // `runtime: null` explicitly clears it, so the agent goes back to audit-only.
+      ...(body.runtime === null ? { runtime: undefined } : runtime ? { runtime } : {}),
+      ...(canaries ? { canaries } : {}),
+    };
+    engine.registerAgent(updated);
+    engine.persist();
+
+    return reply.send({
+      agent: updated,
+      interactive: engine.hasRuntime(updated.id),
+      note: "Config saved. The adapter is attached at startup; restart the API to drive this agent.",
+    });
   });
   app.get("/api/mcp", async () =>
     engine.listAgents().flatMap((a) =>
@@ -480,6 +555,46 @@ export function createApiContext(): ApiContext {
   });
 
   // ---- run missions -------------------------------------------------------
+
+  /**
+   * Start a trap and return its id immediately.
+   *
+   * This is what makes a long run watchable: the caller subscribes to
+   * `/api/missions/:id/stream` and sees each turn as it happens. The blocking
+   * `POST /api/missions` below stays for scripting and for tests.
+   */
+  app.post("/api/missions/start", async (req, reply) => {
+    const body = (req.body ?? {}) as { scenarioId?: ScenarioKey; profile?: AgentProfile; agentId?: string };
+    const scenarioId = body.scenarioId ?? "approval-bypass";
+    const scenario = trapLibrary.find((s) => s.id === scenarioId);
+    if (!scenario) return reply.code(400).send({ error: `unknown scenario: ${scenarioId}` });
+
+    const manifest = activeManifest(body.agentId);
+    if (!manifest) {
+      return reply.code(409).send({ error: "No agent is registered yet. Import one from the Agents page first." });
+    }
+    if (!engine.hasRuntime(manifest.id)) {
+      return reply.code(409).send({
+        error: `"${manifest.name}" has no runtime, so a trap cannot be run against it. Connect a runtime first, or run its static audit.`,
+      });
+    }
+
+    // The sandbox agent carries a per-run runtime (the hardened/weak preset), so
+    // it starts through the lab; anything else uses its registered adapter.
+    const sandbox = lab && manifest.id === lab.agentId && SCENARIO_IDS.includes(scenarioId as ScenarioKey);
+    try {
+      const started = sandbox
+        ? lab!.startScenario(scenarioId as ScenarioKey, body.profile)
+        : engine.startMission({ agentId: manifest.id, scenario });
+      // Nobody is awaiting this promise; a failure already reaches the stream as a
+      // `mission.failed` event, so swallow the rejection rather than crashing.
+      void started.done.catch(() => undefined);
+      return reply.code(202).send({ missionId: started.missionId });
+    } catch (err) {
+      return reply.code(400).send({ error: (err as Error).message });
+    }
+  });
+
   app.post("/api/missions", async (req, reply) => {
     if (!lab) return reply.code(409).send({ error: SANDBOX_OFF });
     const body = req.body as { scenarioId?: ScenarioKey; profile?: AgentProfile };
@@ -585,9 +700,21 @@ export function createApiContext(): ApiContext {
       missions.push(latest);
     }
 
+    // Carry through what the verdict actually rested on, so the receipt's bound
+    // scope can say whether it is backed by exact matches or is judge-only.
+    const disclosureProof = missions
+      .flatMap((m) => m.tests)
+      .find((t) => t.disclosureProof)?.disclosureProof;
+
     let receipt;
     try {
-      receipt = issueReceiptForMissions({ missions, manifest, scenarios: trapLibrary, ledger });
+      receipt = issueReceiptForMissions({
+        missions,
+        manifest,
+        scenarios: trapLibrary,
+        ledger,
+        ...(disclosureProof ? { disclosureProof } : {}),
+      });
     } catch (err) {
       // A bound is never fabricated from zero observations.
       return reply.code(409).send({ error: (err as Error).message });

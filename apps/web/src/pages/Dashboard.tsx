@@ -207,9 +207,12 @@ export function ScenarioLauncher({ onDone }: { onDone: (missionId: string) => vo
     setBusy(id);
     setError(null);
     try {
-      const mission = await api.runMission(id, profile);
-      touch(mission.agentId);
-      onDone(mission.id);
+      // Start the mission and return as soon as the id exists — the room watches
+      // the rest live instead of blocking on the whole run.
+      const agentId = active?.agentId;
+      const { missionId } = await api.startMission(id, { profile, ...(agentId ? { agentId } : {}) });
+      if (agentId) touch(agentId);
+      onDone(missionId);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -260,7 +263,7 @@ export function ScenarioLauncher({ onDone }: { onDone: (missionId: string) => vo
             <div className="row between">
               <span className="tiny faint mono">{s.expectedTools.join(" → ")}</span>
               <button className="btn sm primary" disabled={busy !== null} onClick={() => run(s.id)}>
-                {busy === s.id ? "Running…" : "▶ Run"}
+                {busy === s.id ? "Starting…" : "▶ Run"}
               </button>
             </div>
           </div>

@@ -718,3 +718,70 @@ input.input:focus, select.input:focus { outline: none; border-color: var(--orang
 .verify-flag.warn { border-left: 3px solid var(--medium); }
 .verify-verdict { display: flex; gap: 16px; align-items: flex-start; margin-top: 16px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel-2); }
 @media (max-width: 700px) { .verify-grid { grid-template-columns: 1fr; } }
+
+/* ---- live run banner (war room) ---- */
+.live-banner {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 11px; border-radius: 999px;
+  background: rgba(235, 125, 0, 0.1); border: 1px solid rgba(235, 125, 0, 0.4);
+  color: var(--orange); font-weight: 700; font-size: 11.5px;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.live-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--orange); flex: none;
+  animation: livePulse 1.4s ease-out infinite;
+}
+@keyframes livePulse {
+  0% { box-shadow: 0 0 0 0 rgba(235, 125, 0, 0.55); }
+  70% { box-shadow: 0 0 0 8px rgba(235, 125, 0, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(235, 125, 0, 0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-dot { animation: none; }
+}
+
+/* ---- agent runtime panel (agents page) ---- */
+/* An expanded panel spans the whole inventory grid instead of stretching its
+   neighbours into dead space. */
+.runtime-open { grid-column: 1 / -1; }
+
+.runtime-form { display: flex; flex-direction: column; gap: 14px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.runtime-section {
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel); padding: 12px;
+}
+.runtime-section-title {
+  font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--text-dim); font-weight: 700; margin-bottom: 10px;
+}
+.runtime-fields {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px;
+}
+.runtime-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-dim); min-width: 0; }
+.runtime-field .input { min-width: 0; width: 100%; }
+
+.secret-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 110px minmax(0, 1fr) auto;
+  gap: 8px; align-items: center;
+}
+.secret-row .input { min-width: 0; width: 100%; }
+
+.ack-row {
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--panel-2); font-size: 12.5px; cursor: pointer;
+}
+.ack-row.armed { border-color: rgba(235, 125, 0, 0.5); background: rgba(235, 125, 0, 0.06); }
+.ack-row input[type="checkbox"] { margin-top: 2px; flex: none; }
+
+textarea.input {
+  padding: 8px 10px; border-radius: var(--radius-sm); background: var(--panel);
+  border: 1px solid var(--border-strong); font-size: 12.5px; width: 100%;
+  resize: vertical; min-height: 84px; font-family: inherit;
+}
+textarea.input:focus { outline: none; border-color: var(--orange); }
+
+@media (max-width: 900px) {
+  .secret-row { grid-template-columns: 1fr 1fr; }
+}

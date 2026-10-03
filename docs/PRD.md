@@ -30,6 +30,7 @@ Four things, in a loop:
 | 2 | **Attack** it with a real attacker model, or let it work a synthetic inbox alone | red-team transcript, turn by turn |
 | 3 | **Prove** what happened with exact strings, not opinions | cited findings + a star scorecard |
 | 4 | **Seal it** as a signed, portable receipt | Ed25519 receipt + public verify link |
+| 5 | **Do the same to an agent you do not own** — connect a runtime and the traps apply to it | live turn-by-turn stream in the War Room |
 
 Plus the boring parts that make it usable: drift detection, alerts, SARIF, a CI gate,
 and 24 reusable traps.
@@ -180,6 +181,53 @@ check-run         AgentGuard X PR Gate
 A gate that executed nothing says **NOT RUN**, never "pass". `GET /api/sarif` emits
 SARIF 2.1.0 for GitHub code scanning.
 
+### 4.5 An agent we do not own
+
+Import a repo, then connect a runtime. Real output:
+
+```
+$ # 1. import — audited, never called
+   Accounts API (accounts-api) — 6 tools, kind openapi
+   interactive BEFORE: false
+
+$ # 2. give it a runtime + declare what its sandbox really holds
+   saved: kind=http-chat canaries=2 interactive=true
+
+$ # 3. it is drivable now
+   interactive AFTER:  true
+   example prompts:    24
+
+$ # 4. a bad config is refused, not stored
+   bad kind -> 400
+
+$ # 5. clearing the runtime returns it to audit-only
+   runtime after clear: none  interactive=false
+```
+
+Three runtime kinds: `http-chat` (any endpoint that answers `{message} → {reply}`),
+`openai-compatible` (`/chat/completions` with tool-calling), and `declared` (the repo's own
+model + system prompt, run in-process).
+
+**Live, not replayed.** `POST /api/missions/start` returns the mission id in ~15 ms and the
+run continues in the background:
+
+```
++  14ms  POST /missions/start -> 202  {"missionId":"mis_4bcc766480b2436f9fb7"}
++  91ms  user.prompt          Can you refund my last transaction from Amazon?…
++2384ms  agent.response       Your Amazon charge of ₹2,499 has been refunded…
++2385ms  tool.call_completed  get_transactions() executed successfully.
++2385ms  tool.call_completed  refund_payment() executed successfully.
++4965ms  mission.finished
+```
+
+Tool calls appear at +2385ms, with the turn — not in a burst at the end. 102 events reached
+the browser before the mission finished.
+
+**Tool execution is scoped and recorded.** Four refusals, in order: no declared HTTP shape,
+execution disabled, host not in scope, method not permitted. A blocked call returns
+`blocked: true` with the reason and is still captured as evidence. Live calls require an
+explicit acknowledgement, `GET`/`HEAD` unless a write verb is named, and default to dry-run.
+
 ---
 
 ## 5. Features by surface
@@ -276,9 +324,13 @@ above regress.
 
 ## 8. What it does NOT do (honest limits)
 
-- **Imported agents are audited, never called.** They have no runtime, so red-team traps
-  and receipts cannot run against them — only the static audit, graph, blast radius,
-  findings, drift, SARIF and gate. The UI says this rather than faking a conversation.
+- **An imported agent is audited until you connect a runtime.** Out of the box it has none,
+  so it is read and never called — static audit, graph, blast radius, findings, drift, SARIF
+  and the gate. Give it a runtime (below) and traps, chat and receipts work against it too.
+- **We cannot plant secrets in an agent we do not own.** For a third-party agent you declare
+  what its own sandbox really contains; the scanner looks for exactly those values. Declare
+  none and the run is judge-only — nothing caps the rating, and the judge, the test result
+  and the receipt all say so.
 - **The demo lab is synthetic and now opt-in.** `pnpm dev --demo` loads it; a normal
   workspace shows only the agents you registered.
 - **No voice red-team** (deferred).

@@ -43,6 +43,8 @@ export interface DemoLab {
   /** v2: the drifted manifest (approval removed, powerful external tools added). */
   driftManifest: ReturnType<typeof buildAcmeBankManifest>;
   runScenario(id: ScenarioKey, profile?: AgentProfile): Promise<Mission>;
+  /** Same, but returns the mission id immediately so the run can be watched live. */
+  startScenario(id: ScenarioKey, profile?: AgentProfile): { missionId: string; done: Promise<Mission> };
   /** An operator talks to the agent directly; AgentGuard observes every call. */
   runSession(message: string, profile?: AgentProfile): Promise<Mission>;
 }
@@ -95,6 +97,26 @@ export function createDemoLab(engine: AgentGuardEngine, opts: DemoLabOptions = {
         });
       }
       return engine.runMission({
+        agentId: demoAgentId(),
+        scenario,
+        runtime: useLlm ? makeRuntime(v1, profile) : undefined,
+      });
+    },
+    startScenario(
+      id: ScenarioKey,
+      profile: AgentProfile = defaultProfile,
+    ): { missionId: string; done: Promise<Mission> } {
+      const scenario = SCENARIOS[id];
+      if (id === "permission-drift") {
+        return engine.startMission({
+          agentId: demoAgentId(),
+          scenario,
+          runtime: makeRuntime(v2, profile),
+          manifestOverride: v2,
+          priorManifest: v1,
+        });
+      }
+      return engine.startMission({
         agentId: demoAgentId(),
         scenario,
         runtime: useLlm ? makeRuntime(v1, profile) : undefined,

@@ -66,6 +66,12 @@ export const TestResultSchema = z.object({
   provider: z.string(),
   /** Proven disclosures from the deterministic canary scanner. */
   canaryHits: z.array(CanaryHitSchema).optional(),
+  /**
+   * What this verdict rests on. "deterministic" means exact string evidence was
+   * available and the rating is capped by it; "judge-only" means no declared
+   * values existed to scan for, so nothing clamps the model's opinion.
+   */
+  disclosureProof: z.enum(["deterministic", "judge-only"]).optional(),
   /** Full attacker↔agent transcript, when a red-team loop ran. */
   redteam: RedTeamTranscriptSchema.nullable().optional(),
   /** Model judgement, already reconciled against the canary hits. */

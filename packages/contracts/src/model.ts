@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CanarySchema } from "./canary.js";
 
 /** Every capability edge in the trust/capability graph. */
 export const EdgeKindSchema = z.enum([
@@ -79,6 +80,18 @@ export const ToolDefinitionSchema = z.object({
   approvalRequired: z.boolean().default(false),
   /** True when discovered from schema/source evidence rather than guessed from name. */
   evidenceBacked: z.boolean().default(false),
+  /**
+   * The concrete HTTP call this capability maps to, when it came from an
+   * OpenAPI/Swagger spec. Without it, "run this tool for real" would have to be
+   * reconstructed from the tool's name string, which is guesswork.
+   */
+  http: z
+    .object({
+      method: z.string(),
+      path: z.string(),
+      serverUrl: z.string(),
+    })
+    .optional(),
 });
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
 
@@ -91,6 +104,49 @@ export const AgentAnnotationsSchema = z.object({
   classifiedAt: z.string().optional(),
 });
 export type AgentAnnotations = z.infer<typeof AgentAnnotationsSchema>;
+
+/**
+ * How to actually DRIVE this agent. Absent ⇒ the agent is audit-only: its
+ * declared surface is read and never called, which is the default for anything
+ * imported.
+ *
+ * No credential is ever stored here — `apiKeyEnv` names the environment variable
+ * that holds it, exactly as the model providers work.
+ */
+export const AgentRuntimeKindSchema = z.enum(["http-chat", "openai-compatible", "declared"]);
+export type AgentRuntimeKind = z.infer<typeof AgentRuntimeKindSchema>;
+
+export const AgentToolExecutionSchema = z.object({
+  /** Master switch. Off means nothing is ever sent, not even a dry run. */
+  enabled: z.boolean().default(false),
+  /** Exact hosts that may be contacted. Empty ⇒ nothing is contacted. */
+  allowedHosts: z.array(z.string()).default([]),
+  /** Read-only verbs unless a write verb is named explicitly. */
+  allowedMethods: z.array(z.string()).default(["GET", "HEAD"]),
+  /** Resolve and record the call, or actually send it. */
+  mode: z.enum(["dry-run", "live"]).default("dry-run"),
+  /** Set only by an explicit operator acknowledgement for this agent. */
+  authorizedAt: z.string().nullable().default(null),
+});
+export type AgentToolExecution = z.infer<typeof AgentToolExecutionSchema>;
+
+export const AgentRuntimeConfigSchema = z.object({
+  kind: AgentRuntimeKindSchema,
+  /** http-chat: where to POST. openai-compatible: the API root. */
+  baseUrl: z.string().optional(),
+  /** openai-compatible / declared. */
+  model: z.string().optional(),
+  /** NAME of the env var holding the credential. Never the credential. */
+  apiKeyEnv: z.string().optional(),
+  headers: z.record(z.string()).default({}),
+  /** declared kind only: the agent's own operating brief. */
+  systemPrompt: z.string().optional(),
+  /** Per network turn. */
+  timeoutMs: z.number().int().positive().default(30_000),
+  maxTurns: z.number().int().min(1).max(12).default(5),
+  toolExecution: AgentToolExecutionSchema.default({}),
+});
+export type AgentRuntimeConfig = z.infer<typeof AgentRuntimeConfigSchema>;
 
 /** A declared agent manifest (JSON/YAML/MCP-derived). */
 export const AgentManifestSchema = z.object({
@@ -108,6 +164,15 @@ export const AgentManifestSchema = z.object({
   externalConnectivity: z.boolean().default(false),
   sourceRef: z.string().default("inline"),
   annotations: AgentAnnotationsSchema.optional(),
+  /** How to drive this agent. Absent ⇒ audit-only, never called. */
+  runtime: AgentRuntimeConfigSchema.optional(),
+  /**
+   * Values this agent's OWN sandbox really contains. We cannot plant secrets in
+   * a context we do not own, so for a third-party agent the operator declares
+   * them here and the scanner looks for exactly these. With none, a run is
+   * judge-only and says so.
+   */
+  canaries: z.array(CanarySchema).optional(),
 });
 export type AgentManifest = z.infer<typeof AgentManifestSchema>;
 

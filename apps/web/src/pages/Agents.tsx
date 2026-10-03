@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import type { AgentManifest, AgentRuntimeConfig, AgentRuntimeKind, Canary, CanarySeverity } from "@agentguard/contracts";
 import { api, useApi } from "../lib/api.js";
 import { useAgents } from "../lib/agent-context.js";
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, SeverityBadge, StatCard } from "../components/ui.js";
@@ -124,6 +125,8 @@ function ImportFromGitHub({ onImported }: { onImported: () => void }) {
 export function AgentsPage() {
   const agents = useApi(() => api.agents(), []);
   const missions = useApi(() => api.missions(), []);
+  const { reload: reloadTargets } = useAgents();
+  const [openRuntime, setOpenRuntime] = useState<string | null>(null);
 
   if (agents.error) return <ErrorBox error={agents.error} />;
   if (agents.loading) return <Loading label="Loading agents…" />;
@@ -149,12 +152,14 @@ export function AgentsPage() {
           const latest = missions.data?.filter((m) => m.agentId === a.id).sort((x, y) => (x.createdAt < y.createdAt ? 1 : -1))[0];
           const openFindings = latest?.findings.filter((f) => f.status === "open") ?? [];
           const imported = a.annotations?.importedFrom;
+          const open = openRuntime === a.id;
           return (
             <Card
               key={a.id}
               title={a.name}
               sub={`v${a.version} · ${imported ? `imported · ${a.tools.length} tools` : a.model}`}
               right={<Badge tone={latest?.risk?.band === "critical" ? "critical" : "ok"}>{latest?.risk?.band ?? "n/a"}</Badge>}
+              className={open ? "runtime-open" : ""}
             >
               <p className="small dim">{a.description}</p>
               {imported && <div className="tiny faint mono truncate" style={{ marginTop: 4 }}>{imported}</div>}
@@ -162,16 +167,29 @@ export function AgentsPage() {
                 <span>{a.tools.length} tools</span>
                 <span>{a.mcpServers.length} MCP</span>
                 <span>{openFindings.length} findings</span>
+                <span>{a.runtime ? `runtime: ${a.runtime.kind}` : "audit-only"}</span>
               </div>
               <div className="row between">
                 <span className="row" style={{ gap: 6 }}>
                   {openFindings.slice(0, 1).map((f) => <SeverityBadge key={f.id} severity={f.severity} />)}
                 </span>
                 <span className="row" style={{ gap: 6 }}>
+                  <button className="btn sm" onClick={() => setOpenRuntime(open ? null : a.id)}>
+                    {open ? "Close runtime" : "Runtime"}
+                  </button>
                   <AuditButton agentId={a.id} />
                   <Link className="btn sm" to={`/agents/${a.id}`}>Inspect →</Link>
                 </span>
               </div>
+              {open && (
+                <RuntimePanel
+                  agent={a}
+                  onSaved={() => {
+                    agents.reload();
+                    reloadTargets();
+                  }}
+                />
+              )}
             </Card>
           );
         })}
@@ -302,6 +320,328 @@ export function AgentDetail() {
       <Card title="All Tools (fleet)">
         <div className="tiny faint">{tools.data?.length ?? 0} tools across all agents.</div>
       </Card>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Runtime panel — how this agent is actually driven.
+ *
+ * Nothing here is armed by default: tool execution starts off, the mode
+ * starts at dry-run, and a live call is only ever sent while the operator
+ * has explicitly acknowledged it. Only the NAME of a credential env var is
+ * ever sent — never a value.
+ * ------------------------------------------------------------------ */
+
+interface SecretRow {
+  id: string;
+  label: string;
+  value: string;
+  severity: CanarySeverity;
+  dimension: string;
+}
+
+let secretSeq = 0;
+function blankSecret(): SecretRow {
+  secretSeq += 1;
+  return { id: `secret_${secretSeq}`, label: "", value: "", severity: "high", dimension: "" };
+}
+
+const listToText = (items: string[]): string => items.join(", ");
+const textToList = (text: string): string[] =>
+  text.split(",").map((s) => s.trim()).filter(Boolean);
+
+function RuntimePanel({ agent, onSaved }: { agent: AgentManifest; onSaved: () => void }) {
+  const rt = agent.runtime;
+  const te = rt?.toolExecution;
+
+  const [kind, setKind] = useState<AgentRuntimeKind>(rt?.kind ?? "http-chat");
+  const [baseUrl, setBaseUrl] = useState(rt?.baseUrl ?? "");
+  const [model, setModel] = useState(rt?.model ?? "");
+  const [apiKeyEnv, setApiKeyEnv] = useState(rt?.apiKeyEnv ?? "");
+  const [systemPrompt, setSystemPrompt] = useState(rt?.systemPrompt ?? "");
+  const [timeoutMs, setTimeoutMs] = useState(String(rt?.timeoutMs ?? 30000));
+  const [maxTurns, setMaxTurns] = useState(String(rt?.maxTurns ?? 5));
+
+  const [execEnabled, setExecEnabled] = useState(te?.enabled ?? false);
+  const [allowedHosts, setAllowedHosts] = useState(listToText(te?.allowedHosts ?? []));
+  const [allowedMethods, setAllowedMethods] = useState(listToText(te?.allowedMethods ?? ["GET", "HEAD"]));
+  const [execMode, setExecMode] = useState<"dry-run" | "live">(te?.mode ?? "dry-run");
+  const [ack, setAck] = useState(false);
+
+  const [secrets, setSecrets] = useState<SecretRow[]>(
+    (agent.canaries ?? []).map((c) => ({
+      id: c.id,
+      label: c.label,
+      value: c.value,
+      severity: c.severity,
+      dimension: c.dimension,
+    })),
+  );
+
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+
+  // A live payload is only ever sent while the acknowledgement is ticked.
+  const liveAuthorized = execEnabled && execMode === "live" && ack;
+
+  function updateSecret(id: string, patch: Partial<SecretRow>): void {
+    setSecrets((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  }
+
+  async function save(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const methods = textToList(allowedMethods).map((m) => m.toUpperCase());
+      const runtime: AgentRuntimeConfig = {
+        kind,
+        baseUrl: baseUrl.trim() || undefined,
+        model: model.trim() || undefined,
+        apiKeyEnv: apiKeyEnv.trim() || undefined,
+        systemPrompt: kind === "declared" ? systemPrompt.trim() || undefined : undefined,
+        headers: {},
+        timeoutMs: Math.max(1, Math.floor(Number(timeoutMs) || 30000)),
+        maxTurns: Math.min(12, Math.max(1, Math.floor(Number(maxTurns) || 5))),
+        toolExecution: {
+          enabled: execEnabled,
+          allowedHosts: textToList(allowedHosts),
+          allowedMethods: methods.length > 0 ? methods : ["GET", "HEAD"],
+          // The acknowledgement is the only thing that may arm a live call.
+          mode: liveAuthorized ? "live" : "dry-run",
+          authorizedAt: liveAuthorized ? new Date().toISOString() : null,
+        },
+      };
+      const canaries: Canary[] = secrets
+        .filter((s) => s.label.trim() && s.value.trim())
+        .map((s) => ({
+          id: s.id,
+          label: s.label.trim(),
+          value: s.value.trim(),
+          severity: s.severity,
+          dimension: s.dimension.trim() || "TEST_VALUE",
+        }));
+      const res = await api.setAgentRuntime(agent.id, { runtime, canaries });
+      setNote(`Saved — ${res.agent.runtime?.kind ?? kind} (${liveAuthorized ? "live" : "dry-run"})`);
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clearRuntime(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      await api.setAgentRuntime(agent.id, { runtime: null, canaries: [] });
+      setNote("Runtime cleared — this agent is audit-only again.");
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="runtime-form">
+      <div className="runtime-section">
+        <div className="runtime-section-title">Runtime</div>
+        <div className="runtime-fields">
+          <label className="runtime-field">
+            kind
+            <select className="input" value={kind} onChange={(e) => setKind(e.target.value as AgentRuntimeKind)}>
+              <option value="http-chat">http-chat</option>
+              <option value="openai-compatible">openai-compatible</option>
+              <option value="declared">declared</option>
+            </select>
+          </label>
+          <label className="runtime-field">
+            base URL
+            <input
+              className="input"
+              placeholder="https://agent.example.com/chat"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+            />
+          </label>
+          <label className="runtime-field">
+            model
+            <input className="input" placeholder="gpt-4o-mini" value={model} onChange={(e) => setModel(e.target.value)} />
+          </label>
+          <label className="runtime-field">
+            credential env var name
+            <input
+              className="input"
+              placeholder="AGENT_API_KEY"
+              value={apiKeyEnv}
+              onChange={(e) => setApiKeyEnv(e.target.value)}
+            />
+            <span className="tiny faint">
+              Only the variable's NAME is ever sent — the value is never read, stored or transmitted.
+            </span>
+          </label>
+          <label className="runtime-field">
+            timeout (ms)
+            <input
+              className="input"
+              type="number"
+              min={1}
+              value={timeoutMs}
+              onChange={(e) => setTimeoutMs(e.target.value)}
+            />
+          </label>
+          <label className="runtime-field">
+            max turns
+            <input
+              className="input"
+              type="number"
+              min={1}
+              max={12}
+              value={maxTurns}
+              onChange={(e) => setMaxTurns(e.target.value)}
+            />
+          </label>
+        </div>
+        {kind === "declared" && (
+          <label className="runtime-field" style={{ marginTop: 10 }}>
+            system prompt
+            <textarea
+              className="input"
+              rows={4}
+              placeholder="How this agent should behave…"
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+            />
+          </label>
+        )}
+      </div>
+
+      <div className="runtime-section">
+        <div className="runtime-section-title">Test secrets</div>
+        <p className="tiny faint" style={{ marginTop: 0 }}>
+          Your OWN sandbox test values. AgentGuard looks for exactly these strings coming back out of
+          this agent, so a match is proof of disclosure. With none declared, the run is judge-only —
+          no rating can be capped by a string match.
+        </p>
+        <div className="col" style={{ gap: 8 }}>
+          {secrets.map((s) => (
+            <div className="secret-row" key={s.id}>
+              <input
+                className="input"
+                placeholder="label"
+                value={s.label}
+                onChange={(e) => updateSecret(s.id, { label: e.target.value })}
+              />
+              <input
+                className="input"
+                placeholder="test value"
+                value={s.value}
+                onChange={(e) => updateSecret(s.id, { value: e.target.value })}
+              />
+              <select
+                className="input"
+                value={s.severity}
+                onChange={(e) => updateSecret(s.id, { severity: e.target.value as CanarySeverity })}
+              >
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+                <option value="critical">critical</option>
+              </select>
+              <input
+                className="input"
+                placeholder="dimension e.g. PII_SPILLAGE"
+                value={s.dimension}
+                onChange={(e) => updateSecret(s.id, { dimension: e.target.value })}
+              />
+              <button
+                className="btn sm danger"
+                type="button"
+                title="Remove this test value"
+                onClick={() => setSecrets((prev) => prev.filter((x) => x.id !== s.id))}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+          {secrets.length === 0 && (
+            <span className="tiny faint">No test values declared — this run will be judge-only.</span>
+          )}
+        </div>
+        <button className="btn sm" type="button" style={{ marginTop: 10 }} onClick={() => setSecrets((prev) => [...prev, blankSecret()])}>
+          + Add test value
+        </button>
+      </div>
+
+      <div className="runtime-section">
+        <div className="runtime-section-title">Live tool execution</div>
+        <div className="row" style={{ gap: 10, marginBottom: 10 }}>
+          <button className={`toggle${execEnabled ? " on" : ""}`} type="button" onClick={() => setExecEnabled((v) => !v)}>
+            <span />
+          </button>
+          <span className="small">{execEnabled ? "enabled" : "off — nothing is ever sent"}</span>
+        </div>
+        <div className="runtime-fields">
+          <label className="runtime-field">
+            allowed hosts (comma-separated)
+            <input
+              className="input"
+              placeholder="api.example.com, sandbox.example.com"
+              value={allowedHosts}
+              onChange={(e) => setAllowedHosts(e.target.value)}
+            />
+          </label>
+          <label className="runtime-field">
+            allowed methods (comma-separated)
+            <input
+              className="input"
+              placeholder="GET, HEAD"
+              value={allowedMethods}
+              onChange={(e) => setAllowedMethods(e.target.value)}
+            />
+          </label>
+        </div>
+        <div className="row" style={{ gap: 16, marginTop: 10 }}>
+          <label className="row small" style={{ gap: 6 }}>
+            <input type="radio" name={`mode_${agent.id}`} checked={execMode === "dry-run"} onChange={() => setExecMode("dry-run")} />
+            dry-run
+          </label>
+          <label className="row small" style={{ gap: 6 }}>
+            <input type="radio" name={`mode_${agent.id}`} checked={execMode === "live"} onChange={() => setExecMode("live")} />
+            live
+          </label>
+        </div>
+        <label className={`ack-row${liveAuthorized ? " armed" : ""}`} style={{ marginTop: 10 }}>
+          <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+          <span>
+            I am authorised to test this agent and the hosts listed above.
+            <span className="tiny faint" style={{ display: "block" }}>
+              A live call is only ever sent while this box is ticked; otherwise the payload is forced
+              to dry-run. Requests only ever go to the hosts and methods listed above.
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <div className="row between">
+        <div className="row" style={{ gap: 8 }}>
+          <button className="btn primary" disabled={busy} onClick={() => void save()}>
+            {busy ? "Saving…" : "Save runtime"}
+          </button>
+          <button className="btn sm" disabled={busy || !rt} onClick={() => void clearRuntime()}>
+            Clear runtime
+          </button>
+        </div>
+        <span className="tiny faint">{liveAuthorized ? "will send mode:live" : "will send mode:dry-run"}</span>
+      </div>
+
+      {error && <ErrorBox error={error} />}
+      {note && <div className="tiny" style={{ color: "var(--ok)" }}>{note}</div>}
     </div>
   );
 }

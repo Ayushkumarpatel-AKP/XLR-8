@@ -45,13 +45,22 @@ export interface RunContext {
   prompt: string;
 }
 
+export interface RunOptions {
+  /**
+   * Abort this run. An adapter that talks over the network must honour it, so a
+   * hung upstream cannot hang the mission — and therefore the HTTP request that
+   * is waiting on it.
+   */
+  signal?: AbortSignal;
+}
+
 /**
  * A target agent runtime under test. The demo lab implements this with a real
- * local mock agent that receives prompts, decides, and calls mock tools.
+ * local mock agent; the runtimes/ adapters drive an agent we do not own.
  */
 export interface AgentRuntime {
   readonly manifest: AgentManifest;
-  run(prompt: string, ctx: RunContext): Promise<AgentRunResult>;
+  run(prompt: string, ctx: RunContext, opts?: RunOptions): Promise<AgentRunResult>;
 }
 
 export interface RiskInputs {

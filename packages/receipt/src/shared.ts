@@ -40,6 +40,12 @@ export interface ReceiptControl {
   upperBound95: number;
   /** What this bound covers, so a number is never shown bare. */
   boundScope: string;
+  /**
+   * What the bound rests on. "deterministic" means exact string matches capped
+   * the rating; "judge-only" means no declared values existed, so nothing
+   * clamps the model's opinion. Absent old receipts normalise to "deterministic".
+   */
+  proof?: "deterministic" | "judge-only";
   attackLibraryVersion: string;
   /** Every dimension this control did NOT exercise. */
   notCovered: string[];
@@ -85,6 +91,14 @@ function severity(value: unknown): ReceiptSeverity {
   return SEVERITIES.includes(value as ReceiptSeverity) ? (value as ReceiptSeverity) : "medium";
 }
 
+/**
+ * Missing or unknown proofs collapse to "deterministic", which keeps the signed
+ * bytes of a control that predates the field identical to a new one.
+ */
+function proof(value: unknown): "deterministic" | "judge-only" {
+  return value === "judge-only" ? "judge-only" : "deterministic";
+}
+
 function strArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
@@ -110,6 +124,7 @@ function normalizeControl(raw: unknown): ReceiptControl {
     violations: num(r.violations, 0),
     upperBound95: num(r.upperBound95, 0),
     boundScope: str(r.boundScope),
+    proof: proof(r.proof),
     attackLibraryVersion: str(r.attackLibraryVersion),
     notCovered: strArray(r.notCovered),
   };

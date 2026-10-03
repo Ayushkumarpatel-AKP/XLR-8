@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import type { Mission } from "@agentguard/contracts";
 import { api, type AgentTarget } from "../lib/api.js";
 
@@ -277,6 +278,11 @@ function AuditOnlyBody({
           declared capability surface — it never calls it.
         </div>
 
+        <p className="small dim" style={{ margin: "10px 0 0" }}>
+          Connecting a runtime is what enables traps, chat and signed receipts — it is how AgentGuard is
+          allowed to drive this agent for real. Until then, nothing is called.
+        </p>
+
         {error && <div className="target-error">⚠ {error}</div>}
 
         <div className="target-tools">
@@ -303,12 +309,15 @@ function AuditOnlyBody({
         <button
           type="button"
           className="btn primary"
-          style={{ width: "100%" }}
+          style={{ flex: 1 }}
           disabled={busy}
           onClick={() => void audit()}
         >
           {busy ? "Auditing…" : `▶ Run static audit (${target.toolCount} tools, nothing executed)`}
         </button>
+        <Link className="btn" to="/agents" title="Configure how to drive this agent — enables traps, chat and receipts">
+          Connect a runtime
+        </Link>
       </div>
     </>
   );

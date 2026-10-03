@@ -33,6 +33,8 @@ import { computeRisk } from "./risk.js";
 import { Blackboard, blackboardId } from "./blackboard.js";
 import { initialSwarm, SWARM_STAGES, type StageContext } from "./swarm.js";
 import { firstByCanary, scanAgentRun } from "./canary-scan.js";
+import { resolveCanaries } from "./canary-resolve.js";
+import { createRuntime } from "./runtimes/index.js";
 import { runRedTeam } from "./redteam.js";
 import { runAutonomous } from "./autonomous.js";
 import { judgeRun } from "./judge.js";
@@ -53,6 +55,11 @@ export interface RunMissionOptions {
   /** Previous posture, used by the permission-drift scenario. */
   priorManifest?: AgentManifest;
   promptOverride?: string;
+  /**
+   * A record already created by `startMission`, so its id is available before any
+   * work begins. Internal — callers use runMission or startMission.
+   */
+  mission?: Mission;
 }
 
 export interface AgentGuardEngineOptions {
@@ -121,7 +128,14 @@ export class AgentGuardEngine {
       if (state) {
         this.store.hydrate(state.missions);
         this.evidence.hydrate(state.evidence);
-        for (const manifest of state.agents) this.agents.set(manifest.id, manifest);
+        for (const manifest of state.agents) {
+          this.agents.set(manifest.id, manifest);
+          // A saved runtime config means this agent can be driven, not merely
+          // audited. Runtimes themselves are never persisted, so they are rebuilt
+          // from the config; without one the agent stays audit-only, as before.
+          const runtime = createRuntime(manifest, this.router);
+          if (runtime) this.runtimes.set(manifest.id, runtime);
+        }
         // The first-seen posture survives restarts, so re-imports are diffable.
         for (const snap of state.baselines) this.baselines.set(snap.agentId, snap);
       }
@@ -171,7 +185,17 @@ export class AgentGuardEngine {
 
   registerAgent(manifest: AgentManifest, runtime?: AgentRuntime): AgentManifest {
     this.agents.set(manifest.id, manifest);
-    if (runtime) this.runtimes.set(manifest.id, runtime);
+    if (runtime) {
+      this.runtimes.set(manifest.id, runtime);
+    } else if (manifest.runtime) {
+      // A manifest that carries a runtime config gets its adapter built here, so
+      // saving the config is enough to make the agent drivable.
+      const built = createRuntime(manifest, this.router);
+      if (built) this.runtimes.set(manifest.id, built);
+    } else {
+      // No config: an agent that previously had one is now audit-only again.
+      this.runtimes.delete(manifest.id);
+    }
     if (!this.baselines.has(manifest.id)) {
       this.baselines.set(manifest.id, snapshotAgent(manifest, "baseline"));
     }
@@ -287,19 +311,14 @@ export class AgentGuardEngine {
 
   // ---- orchestration ------------------------------------------------------
 
-  async runMission(opts: RunMissionOptions): Promise<Mission> {
-    const mode = opts.mode ?? "stress";
-    const manifest = opts.manifestOverride ?? this.agents.get(opts.agentId);
-    if (!manifest) throw new Error(`Unknown agent: ${opts.agentId}`);
-    const runtime = opts.runtime ?? this.runtimes.get(opts.agentId);
-    if (mode === "stress" && !runtime) throw new Error(`No runtime registered for agent: ${opts.agentId}`);
-
-    const mission: Mission = {
+  /** The mission record itself. Split out so its id can exist before any work. */
+  private buildMission(manifest: AgentManifest, scenario: ScenarioDefinition): Mission {
+    return {
       id: newId("mission"),
       agentId: manifest.id,
       agentName: manifest.name,
-      scenarioId: opts.scenario.id,
-      title: `${opts.scenario.title} — ${manifest.name}`,
+      scenarioId: scenario.id,
+      title: `${scenario.title} — ${manifest.name}`,
       environment: manifest.environment,
       status: "running",
       createdAt: nowIso(),
@@ -314,6 +333,41 @@ export class AgentGuardEngine {
       graph: null,
       tests: [],
     };
+  }
+
+  /**
+   * Register a mission and start it, returning its id straight away.
+   *
+   * This is what makes a long run watchable: the caller can subscribe to
+   * `GET /api/missions/:id/stream` before the first turn completes, instead of
+   * waiting for the whole mission and then replaying it.
+   */
+  startMission(opts: RunMissionOptions): { missionId: string; done: Promise<Mission> } {
+    const manifest = opts.manifestOverride ?? this.agents.get(opts.agentId);
+    if (!manifest) throw new Error(`Unknown agent: ${opts.agentId}`);
+    const mode = opts.mode ?? "stress";
+    if (mode === "stress" && !(opts.runtime ?? this.runtimes.get(opts.agentId))) {
+      throw new Error(`No runtime registered for agent: ${opts.agentId}`);
+    }
+    const mission = this.buildMission(manifest, opts.scenario);
+    // Put it in the store first, so a stream request that arrives during the very
+    // first turn already finds the mission.
+    this.store.put(mission);
+    return { missionId: mission.id, done: this.runMission({ ...opts, mission }) };
+  }
+
+  async runMission(opts: RunMissionOptions): Promise<Mission> {
+    const mode = opts.mode ?? "stress";
+    const manifest = opts.manifestOverride ?? this.agents.get(opts.agentId);
+    if (!manifest) throw new Error(`Unknown agent: ${opts.agentId}`);
+    // Captured for `processToolCalls`, which is a function statement (so it can
+    // hoist and be called per turn) and therefore has no `this` of its own.
+    const self = this;
+    const agent = manifest;
+    const runtime = opts.runtime ?? this.runtimes.get(opts.agentId);
+    if (mode === "stress" && !runtime) throw new Error(`No runtime registered for agent: ${opts.agentId}`);
+
+    const mission: Mission = opts.mission ?? this.buildMission(manifest, opts.scenario);
     this.store.put(mission);
 
     const executionId = newId("execution");
@@ -480,6 +534,8 @@ export class AgentGuardEngine {
     let runs: AgentRunResult[] = [];
     let redteam: RedTeamTranscript | null = null;
     let canaryHits: CanaryHit[] = [];
+    /** What the verdict will rest on, decided when the canaries are resolved. */
+    let disclosureProof: "deterministic" | "judge-only" | undefined;
     let violationSeverity: Severity = "info";
     let toolRequests: string[] = [];
     let startedAt = nowIso();
@@ -488,7 +544,11 @@ export class AgentGuardEngine {
     const decisionIds: string[] = [];
     const executionEvidenceIds: string[] = [];
     const prompt = opts.promptOverride ?? opts.scenario.userPrompt;
-    const canaries = opts.scenario.canaries ?? [];
+    // Which values this run can be judged against. A third-party agent's
+    // context is not ours, so the operator declares them; with none, this is
+    // a judge-only run and says so rather than implying proven evidence.
+    const resolvedCanaries = resolveCanaries(agent, opts.scenario);
+    const canaries = resolvedCanaries.canaries;
 
     // ---- the stage bodies ------------------------------------------------
     const execute = async (stage: SwarmAgentId): Promise<void> => {
@@ -663,6 +723,10 @@ export class AgentGuardEngine {
           startedAt = nowIso();
           t0 = Date.now();
 
+          // `processToolCalls` is declared as a function statement further down;
+          // block-scoped function declarations hoist, so runAgentTurn below can
+          // call it during its turn rather than after the whole loop.
+
           const emitModelUsed = (r: AgentRunResult): void => {
             if (!r.providerId) return;
             emit({
@@ -708,6 +772,7 @@ export class AgentGuardEngine {
             });
             emitAgentResponse(r, turn);
             emitModelUsed(r);
+            processToolCalls(r);
             return r;
           };
 
@@ -822,16 +887,23 @@ export class AgentGuardEngine {
             runs = [run];
             emitAgentResponse(run);
             emitModelUsed(run);
+            processToolCalls(run);
           }
 
           const allToolCalls = runs.flatMap((r) => r.toolCalls);
           toolRequests = allToolCalls.map((t) => t.tool);
 
-          for (const call of allToolCalls) {
-            const tool = manifest.tools.find((t) => t.name === call.tool);
+          /**
+           * Processes one run's tool calls: events, evidence, policy and findings.
+           * Called per turn so tool activity streams live, instead of arriving in
+           * one burst after the turn loop has finished.
+           */
+          function processToolCalls(r: AgentRunResult): void {
+            for (const call of r.toolCalls) {
+            const tool = agent.tools.find((t) => t.name === call.tool);
             emit({
               actorType: "agent",
-              actorId: manifest.id,
+              actorId: agent.id,
               type: MissionEventType.toolCallRequested,
               status: "running",
               severity: "info",
@@ -847,8 +919,8 @@ export class AgentGuardEngine {
             });
             executionEvidenceIds.push(toolEvidence.id);
 
-            const input = tool ? this.policyInput(tool, mission.risk?.score ?? 0) : null;
-            const result = input ? evaluatePolicy(this.policySet.rules, input) : null;
+            const input = tool ? self.policyInput(tool, mission.risk?.score ?? 0) : null;
+            const result = input ? evaluatePolicy(self.policySet.rules, input) : null;
             const decision = input && result ? toPolicyDecision(result, input, { missionId: mission.id, executionId }) : null;
             if (decision) {
               const dEvidence = capture("policy_decision", decision.id, `Runtime policy decision for ${call.tool}`, decision);
@@ -946,7 +1018,7 @@ export class AgentGuardEngine {
 
             emit({
               actorType: "agent",
-              actorId: manifest.id,
+              actorId: agent.id,
               type: MissionEventType.toolCallCompleted,
               status: "success",
               severity: "info",
@@ -954,12 +1026,25 @@ export class AgentGuardEngine {
               payload: { toolName: call.tool, ok: call.ok },
               evidenceIds: [toolEvidence.id],
             });
+            }
           }
 
           // --- CANARY VERIFICATION ---------------------------------------
           // Deterministic ground truth: exact synthetic values planted in the
           // agent's own context, matched against what it actually said and sent.
           canaryHits = [];
+          disclosureProof = mode === "audit" ? undefined : resolvedCanaries.proof;
+          if (mode === "stress" && resolvedCanaries.proof === "judge-only") {
+            emit({
+              actorType: "agent",
+              actorId: "judge",
+              type: MissionEventType.canaryTriggered,
+              status: "warn",
+              severity: "medium",
+              message: `No string evidence available — judge-only run. ${resolvedCanaries.note}`,
+              payload: { proof: "judge-only" },
+            });
+          }
           if (mode === "stress" && canaries.length > 0) {
             for (const match of firstByCanary(runs.flatMap((r) => scanAgentRun(r, canaries)))) {
               const evidence = capture(
@@ -1160,6 +1245,7 @@ export class AgentGuardEngine {
             model: run.model ?? manifest.model,
             provider: run.providerId ?? this.router.statuses().at(-1)?.id ?? "deterministic",
             canaryHits,
+            disclosureProof,
             redteam,
             judge,
           };

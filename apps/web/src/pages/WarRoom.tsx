@@ -81,6 +81,14 @@ export function WarRoom() {
     [events, mission?.events],
   );
   const toolFlow = useMemo(() => deriveToolFlow(liveEvents), [liveEvents]);
+  // A running mission is watched, not waited on: count its turns and tick a
+  // clock while it streams. Prefer red-team turns, fall back to agent replies.
+  const turnCount = useMemo(() => {
+    const redteamTurns = liveEvents.filter((e) => e.type === "redteam.turn").length;
+    return redteamTurns > 0 ? redteamTurns : liveEvents.filter((e) => e.type === "agent.response").length;
+  }, [liveEvents]);
+  const running = mission?.status === "running";
+  const elapsed = useElapsed(mission?.startedAt ?? mission?.createdAt ?? null, running);
   const criticalFinding = mission?.findings.find((f) => f.severity === "critical") ?? mission?.findings[0] ?? null;
   const isSession = mission?.scenarioId === "chat";
 
@@ -109,6 +117,12 @@ export function WarRoom() {
             <span className={`badge ${target?.interactive ? "ok" : "medium"}`}>
               {target ? `${target.interactive ? "●" : "○"} ${target.model || "unknown"}` : "…"}
             </span>
+            {running && (
+              <span className="live-banner" title="Live run — the elapsed clock ticks once a second">
+                <span className="live-dot" />
+                running · {elapsed} · {turnCount} turn{turnCount === 1 ? "" : "s"}
+              </span>
+            )}
             {mission && <Badge tone={mission.status === "completed" ? "ok" : "medium"}>● {mission.status.toUpperCase()}</Badge>}
             {mission && <Link className="btn sm" to={`/replay/${mission.id}`}>Replay</Link>}
           </div>
@@ -269,4 +283,28 @@ function nodeClass(e: MissionEvent): string {
   if (e.status === "warn") return "warn";
   if (e.status === "success" || e.status === "done") return "ok";
   return "";
+}
+
+/** Ticks once a second while `active`, so a running mission shows a live clock. */
+function useElapsed(startIso: string | null, active: boolean): string {
+  const [now, setNow] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [active, startIso]);
+  if (!startIso) return "0s";
+  const start = new Date(startIso).getTime();
+  if (Number.isNaN(start)) return "0s";
+  return fmtDuration(Math.max(0, Math.floor((now - start) / 1000)));
+}
+
+function fmtDuration(totalSeconds: number): string {
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  if (m > 0) return `${m}m ${String(s).padStart(2, "0")}s`;
+  return `${s}s`;
 }

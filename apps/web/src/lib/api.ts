@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AgentManifest,
+  AgentRuntimeConfig,
+  AgentToolExecution,
   BlastRadius,
+  Canary,
   CapabilityGraph,
   DriftEvent,
   EvidenceRecord,
@@ -16,6 +19,10 @@ import type {
   TestResult,
 } from "@agentguard/contracts";
 import type { Receipt } from "@agentguard/receipt/shared";
+
+// How a runtime is configured, and the values an operator declares. Re-exported
+// so UI code can speak the same shapes the API accepts without deep imports.
+export type { AgentRuntimeConfig, AgentToolExecution, Canary };
 
 const BASE = "/api";
 
@@ -209,6 +216,25 @@ export const api = {
       body: JSON.stringify(input),
     }),
   auditAgent: (agentId: string) => request<Mission>(`/agents/${agentId}/audit`, { method: "POST", body: "{}" }),
+  /**
+   * Set (or clear, with `runtime: null`) how an agent is driven. No credential
+   * value is ever sent — `apiKeyEnv` names the environment variable holding it.
+   */
+  setAgentRuntime: (agentId: string, body: { runtime?: AgentRuntimeConfig | null; canaries?: Canary[] }) =>
+    request<{ agent: AgentManifest }>(`/agents/${agentId}/runtime`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  /**
+   * Start a mission and return as soon as the id exists: the mission keeps
+   * running in the background and streams over SSE, so the War Room can watch
+   * it live instead of blocking on the whole run.
+   */
+  startMission: (scenarioId: ScenarioId, opts?: { profile?: "hardened" | "weak"; agentId?: string }) =>
+    request<{ missionId: string }>("/missions/start", {
+      method: "POST",
+      body: JSON.stringify({ scenarioId, ...opts }),
+    }),
   runMission: (scenarioId: ScenarioId, profile?: "hardened" | "weak") =>
     request<Mission>("/missions", { method: "POST", body: JSON.stringify({ scenarioId, profile }) }),
   runTest: (scenarioId: ScenarioId, profile?: "hardened" | "weak") =>

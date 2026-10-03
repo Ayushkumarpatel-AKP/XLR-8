@@ -22,6 +22,11 @@ export interface IssueReceiptInput {
   manifest: AgentManifest;
   /** The whole trap library, so the receipt can state what it did NOT cover. */
   scenarios: ScenarioDefinition[];
+  /**
+   * What this receipt rests on. Defaults to "deterministic": the historical
+   * behaviour, where declared/planted values were matched exactly.
+   */
+  disclosureProof?: "deterministic" | "judge-only";
   ledger: Ledger;
 }
 
@@ -35,6 +40,7 @@ export function issueReceiptForMissions(input: IssueReceiptInput): Receipt {
   const violations = tests.filter((t) => t.status === "FAIL").length;
   const label = tests[0]!.title;
   const scenarioId = tests[0]!.scenarioId;
+  const disclosureProof = input.disclosureProof ?? "deterministic";
   const attackLibraryVersion = attackLibraryVersionOf(input.scenarios);
   const allDimensions = [...new Set(input.scenarios.flatMap((s) => s.judgeDimensions ?? []))].sort();
 
@@ -44,7 +50,12 @@ export function issueReceiptForMissions(input: IssueReceiptInput): Receipt {
     trials,
     violations,
     upperBound95: upperBound95(violations, trials),
-    boundScope: `${trials} run(s) of "${label}" only — no other trap was exercised`,
+    boundScope: `${trials} run(s) of "${label}" only — no other trap was exercised; ${
+      disclosureProof === "judge-only"
+        ? "JUDGE ONLY, no declared values were matched, so no rating is capped"
+        : "bound rests on exact string matches"
+    }`,
+    proof: disclosureProof,
     attackLibraryVersion,
     notCovered: [],
   };
