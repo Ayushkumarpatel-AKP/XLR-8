@@ -10,7 +10,7 @@ _Discover. Test. Monitor. Secure._
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-339933.svg?logo=node.js&logoColor=white)](package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-workspaces-F69220.svg?logo=pnpm&logoColor=white)](pnpm-workspace.yaml)
-[![Tests](https://img.shields.io/badge/tests-170%20passing-4fbf7a.svg)](#verify-it)
+[![Tests](https://img.shields.io/badge/tests-212%20passing-4fbf7a.svg)](#verify-it)
 [![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6.svg?logo=typescript&logoColor=white)](tsconfig.json)
 [![Receipts](https://img.shields.io/badge/receipts-Ed25519%20signed-4fbf7a.svg)](#can-you-prove-it)
 [![Demo](https://img.shields.io/badge/DEMO-SANDBOX%20%C2%B7%20NO%20REAL%20DATA-eb7d00.svg)](#-demo--sandbox--no-real-data)
@@ -41,7 +41,7 @@ driven by **one engine, one event stream, one database**.
 | 4 | **Proves it leaked** — an exact planted value, quoted, not a model's opinion | Findings with a cited line + a star rating it caps |
 | 5 | **Keeps proof** — every finding is backed by content-addressed evidence | Findings → click → evidence drawer with sha256 |
 | 6 | **Seals it** — a signed, portable receipt anyone can verify, that expires when the agent changes | Signed Receipts + a public `/verify` page |
-| 7 | **Shows the damage** — if this agent were compromised, what could it reach? | Blast radius simulator |
+| 7 | **Shows the damage** — if this agent were compromised, what could it reach? | Trust & Capability → *Simulate impact* |
 | 8 | **Tells you what to fix** | Reports with recommendations |
 | 9 | **Alerts you** — in-app, webhook, or email | Bell + notification channels |
 | 10 | **Audits real agents from GitHub** — without ever calling them | `agent import` + static audit |
@@ -243,6 +243,10 @@ harmful action is ever executed. Synthetic data is generated at runtime and alwa
 **Imported agents are audited, never called** — so you can inspect an agent that talks to
 real banking or payment APIs without touching them.
 
+A workspace starts **empty**: `pnpm dev` registers no agent at all, and every screen says so with
+a link to import one rather than inventing a fixture. `pnpm dev --demo` additionally loads the
+built-in sandbox agent, which is what the trap walkthroughs in this README run against.
+
 ---
 
 ## Quickstart
@@ -269,7 +273,8 @@ pnpm ag                     # interactive TUI (banner, chat, slash commands)
 pnpm ag demo run --follow   # live mission, step by step
 
 # 6. API + web
-pnpm dev                    # API → :8787   Web → :5173
+pnpm dev                    # API → :8787   Web → :5173   (empty workspace — no agent registered)
+pnpm dev --demo             # the same, plus the built-in sandbox agent the traps run against
 ```
 
 Requires **Node ≥ 20** and **pnpm**. No Docker needed.
@@ -279,10 +284,15 @@ Requires **Node ≥ 20** and **pnpm**. No Docker needed.
 ## Verify it
 
 ```bash
-pnpm check            # typecheck + hardcoded-data guard + 170 tests
+pnpm check            # typecheck + hardcoded-data guard + 212 tests
 pnpm verify:receipt   # real model → real leak → signed receipt → 4 verification checks
 pnpm verify:api       # the same over HTTP, including supersession
+pnpm audit:routes     # walk every route in a headless browser and fail on a dead end
 ```
+
+`audit:routes` visits all fourteen routes with an **empty workspace** — the state nobody tries by
+hand, and the one where a missing empty-state guard hides the only way forward. It fails on a stuck
+loading label, an empty content area, or a screen that offers nothing to click.
 
 The invariant tests are the point, not decoration:
 
@@ -293,6 +303,9 @@ The invariant tests are the point, not decoration:
 - **every assistant turn is scanned**, not just the final one
 - **a canary that could never fire is dropped**, with a reason
 - **a confidence bound is never printed from zero trials**
+- **a transient provider failure does not stick** — a failed health check expires and is re-probed,
+  and skipping an unhealthy provider records *why*, so a run never reports "not configured" for a
+  provider that merely throttled
 - **a tampered receipt fails verification** and a malformed one returns `false`
 - **risk calculation is reproducible** (same inputs → same score, twice)
 - **evidence integrity holds** after a full run (sha256 recomputed)
@@ -484,9 +497,11 @@ Global flags: `--json` `--quiet` `--verbose` `--provider` `--config` `--output` 
 
 ## Web app
 
-Routes: `/dashboard`, `/agents`, `/agents/:id`, `/war-room/:missionId`, `/target`,
-`/replay/:missionId`, `/testing`, `/receipts`, `/threat-model`, `/drift`, `/graph`,
-`/blast-radius`, `/findings`, `/reports`, `/providers`, `/policies`, `/settings`.
+Routes: `/dashboard`, `/target`, `/war-room/:missionId`, `/replay/:missionId`, `/agents`,
+`/agents/:id`, `/findings`, `/receipts`, `/drift`, `/trust`, `/threat-model`, `/providers`,
+`/reports`, `/settings` — fourteen, grouped in the sidebar by **what you are doing**
+(*Operations* / *Agents* / *Evidence* / *Security* / *System*) rather than by which module
+implements it.
 
 One route sits **outside the app shell** on purpose: `/verify/:fingerprint?receipt=…` — the
 public receipt verification page. It needs no sign-in, reads the whole receipt out of the
@@ -497,6 +512,13 @@ closed.
 **The whole app follows one agent at a time.** The top bar has an agent switcher
 (*All agents (fleet)* or any registered agent), and the choice is shared with the CLI
 (`GET/POST /api/active-agent`).
+
+**A run in flight announces itself.** While a mission is running, the War Room item in the sidebar
+glows and links **straight to that run** instead of to "latest" — so you can always tell whether
+something started, and reach it, without hunting. *Run Security Mission* starts one trap, returns as
+soon as the mission exists, and opens the room immediately: the room is watched live, never waited
+on. A run that fails leads with **why**, taken from the mission's own failure event, rather than
+leaving a console full of partial events and an empty-looking page.
 
 **Attack Scenarios has a Hardened / Weak toggle.** The same trap runs against two operating
 briefs, so you can see the detector fire as well as hold. The weak preset is the ordinary
