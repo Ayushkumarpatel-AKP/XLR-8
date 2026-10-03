@@ -27,11 +27,20 @@ export function Dashboard() {
   const missionsRaw = useApi(() => api.missions(), []);
   const findingsRaw = useApi(() => api.findings(), []);
   const events = useGlobalStream();
+  const scenarios = useApi(() => api.scenarios(), []);
   const navigate = useNavigate();
   const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { activeAgentId, active, setActiveAgentId, touch } = useAgents();
   // An audit-only agent has no runtime, so no trap can be aimed at it.
   const auditOnly = Boolean(active && !active.interactive);
+
+  // A trap needs a tool-capable provider to drive the agent. Without a healthy
+  // one the run is guaranteed to fail, so say so before the click rather than
+  // letting the War Room fill up and then stop for no visible reason.
+  const providers = useApi(() => api.providers(), []);
+  const noToolProvider =
+    (providers.data ?? []).length > 0 && !(providers.data ?? []).some((p) => p.tools && p.health?.ok);
 
   // When an agent is active, the whole dashboard describes that agent.
   const missions = useMemo(
@@ -58,13 +67,35 @@ export function Dashboard() {
   const openFindings = findings.filter((f) => f.status === "open");
   const testedMissions = missions.filter((m) => m.tests.length > 0);
 
-  async function runAll() {
+  // Start ONE trap and go straight to the room.
+  //
+  // This used to call /demo/run, which runs all 24 scenarios and only resolves
+  // when the last one finishes. A slow or failing provider meant the button sat
+  // on "Running…" and the screen never moved — the War Room looked unsynced
+  // because it was never navigated to.
+  async function runMission(): Promise<void> {
+    const trap = scenarios.data?.[0]?.id;
+    if (!trap) {
+      setError("No scenario is available to run.");
+      return;
+    }
     setRunning(true);
+    setError(null);
     try {
-      const res = await api.runAll();
-      const last = res.missions.at(-1);
-      if (last) touch(last.agentId);
-      navigate(`/war-room/${last?.id ?? "latest"}`);
+      const runnable = active?.interactive ? active.agentId : undefined;
+      const { missionId } = await api.startMission(trap, {
+        profile: "hardened",
+        ...(runnable ? { agentId: runnable } : {}),
+      });
+      try {
+        const started = await api.mission(missionId);
+        touch(started.agentId);
+      } catch {
+        /* the room loads the mission itself */
+      }
+      navigate(`/war-room/${missionId}`);
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setRunning(false);
     }
@@ -112,11 +143,17 @@ export function Dashboard() {
             <button className="btn" onClick={() => { missionsRaw.reload(); findingsRaw.reload(); agents.reload(); }}>↻ Refresh</button>
             <button
               className="btn primary"
-              disabled={running}
-              onClick={runAll}
-              title={auditOnly ? `Runs the built-in sandbox agent — ${active?.name} has no runtime to drive` : "Runs the built-in sandbox agent"}
+              disabled={running || !scenarios.data?.length}
+              onClick={() => void runMission()}
+              title={
+                auditOnly
+                  ? `Runs the built-in sandbox agent — ${active?.name} has no runtime to drive`
+                  : scenarios.data?.[0]
+                    ? `Runs "${scenarios.data[0].title}" and opens the War Room straight away`
+                    : "No scenario is available"
+              }
             >
-              {running ? "Running…" : "▶ Run Security Mission"}
+              {running ? "Starting…" : "▶ Run Security Mission"}
             </button>
           </div>
         }
@@ -133,6 +170,19 @@ export function Dashboard() {
           .
         </p>
       )}
+
+      {noToolProvider && (
+        <p className="small faint" style={{ margin: "-4px 0 0" }}>
+          <strong>No tool-capable model provider is available right now</strong> — a run would start and then
+          fail before it tested anything.{" "}
+          <Link to="/providers" style={{ color: "var(--orange)" }}>
+            Check providers
+          </Link>{" "}
+          (a rate limit or an expired key is the usual cause).
+        </p>
+      )}
+
+      {error && <ErrorBox error={error} />}
 
       <div className="grid cols-5">
         <StatCard label="Agents" value={agentList.length} hint={active ? "selected" : "discovered"} />

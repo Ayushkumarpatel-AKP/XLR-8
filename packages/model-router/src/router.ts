@@ -44,6 +44,7 @@ export class ModelRouter {
   private readonly status = new Map<string, ProviderHealth>();
 
   constructor(config: ProviderConfig = {}) {
+    this.healthRetryMs = config.healthRetryMs ?? 15_000;
     const list: ModelProvider[] = [];
 
     if (config.groqApiKey) {
@@ -141,14 +142,36 @@ export class ModelRouter {
     }));
   }
 
+  /**
+   * How long a FAILED health result is trusted before it is probed again.
+   *
+   * A passing check is cached indefinitely, but a failing one must expire:
+   * otherwise a single transient failure — a rate limit, a blip — would poison
+   * every later run until something re-checked by hand, and each of those runs
+   * would report the provider as unusable.
+   */
+  private readonly healthRetryMs: number;
+
+  private async healthFor(p: ModelProvider): Promise<ProviderHealth> {
+    const cached = this.status.get(p.id);
+    if (cached?.ok) return cached;
+    const age = cached ? Date.now() - Date.parse(cached.checkedAt) : Number.NaN;
+    if (cached && Number.isFinite(age) && age < this.healthRetryMs) return cached;
+    const fresh = await p.health();
+    this.status.set(p.id, fresh);
+    return fresh;
+  }
+
   /** Try each provider in order; fall through when one is unhealthy or errors. */
   async generate(args: GenerateStructuredArgs): Promise<GenerateResult> {
     let lastError: Error | null = null;
     for (const p of this.providers) {
       if (p.kind !== "deterministic") {
-        const health = this.status.get(p.id) ?? (await p.health());
-        this.status.set(p.id, health);
-        if (!health.ok) continue;
+        const health = await this.healthFor(p);
+        if (!health.ok) {
+          lastError = new Error(`${p.id} is configured but not usable right now: ${health.detail}`);
+          continue;
+        }
       }
       try {
         const text = await p.generateStructured(args);
@@ -167,19 +190,38 @@ export class ModelRouter {
    */
   async chat(messages: ChatMessage[], tools: ToolSpec[]): Promise<ChatOutcome> {
     let lastError: Error | null = null;
-    for (const p of this.providers) {
-      if (p.kind === "deterministic" || p.supportsTools?.() !== true || !p.chat) continue;
-      const health = this.status.get(p.id) ?? (await p.health());
-      this.status.set(p.id, health);
-      if (!health.ok) continue;
+    const candidates = this.providers.filter(
+      (p) => p.kind !== "deterministic" && p.supportsTools?.() === true && typeof p.chat === "function",
+    );
+
+    for (const p of candidates) {
+      // Held locally so the type narrows: `chat` is optional on the interface,
+      // and `this` inside it must stay bound to the provider.
+      const chatFn = p.chat;
+      if (typeof chatFn !== "function") continue;
+
+      const health = await this.healthFor(p);
+      if (!health.ok) {
+        // Remember WHY. Skipping silently here is what produced the
+        // "set GROQ_API_KEY" message for a provider that was already configured
+        // and merely throttled.
+        lastError = new Error(`${p.id} is configured but not usable right now: ${health.detail}`);
+        continue;
+      }
       try {
-        const result = await p.chat(messages, tools);
+        const result = await chatFn.call(p, messages, tools);
         return { result, providerId: p.id, providerKind: p.kind, model: p.model };
       } catch (err) {
         lastError = err as Error;
         this.status.set(p.id, { ok: false, latencyMs: null, checkedAt: nowIso(), detail: lastError.message });
       }
     }
-    throw lastError ?? new Error("No tool-capable model provider is configured (set GROQ_API_KEY)");
+
+    if (lastError) throw lastError;
+    throw new Error(
+      candidates.length > 0
+        ? `No tool-capable model provider is currently available (${candidates.map((p) => p.id).join(", ")}).`
+        : "No tool-capable model provider is configured. Set GROQ_API_KEY, or add one on the Providers page.",
+    );
   }
 }

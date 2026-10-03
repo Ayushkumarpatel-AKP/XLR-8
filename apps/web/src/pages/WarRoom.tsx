@@ -20,7 +20,10 @@ export function useResolvedMission(idParam: string | undefined, agentId?: string
         .missions()
         .then((ms) => {
           const scoped = agentId ? ms.filter((m) => m.agentId === agentId) : ms;
-          setResolved(scoped[0]?.id ?? null);
+          // Fall back to the newest mission in the workspace when the agent we
+          // are scoped to has none. An empty room while 60 missions exist reads
+          // as "nothing synced"; the header still names whose mission it is.
+          setResolved(scoped[0]?.id ?? ms[0]?.id ?? null);
         })
         .catch(() => setResolved(null));
     } else {
@@ -97,6 +100,15 @@ export function WarRoom() {
   const test = mission?.tests[0] ?? null;
   const activeTrap = traps.data?.traps.find((t) => t.id === mission?.scenarioId) ?? null;
 
+  // A failed run is the most confusing state in the product: the console fills
+  // with partial events and then just stops. Lead with WHY, taken from the
+  // failure event itself, instead of leaving a bare FAILED badge.
+  const failure =
+    mission?.status === "failed"
+      ? (liveEvents.filter((e) => e.type === "mission.failed").at(-1)?.message ??
+        "The run stopped before it could test anything.")
+      : null;
+
   function handleNewMission(m: Mission): void {
     navigate(`/war-room/${m.id}`, { replace: true });
   }
@@ -128,6 +140,21 @@ export function WarRoom() {
           </div>
         }
       />
+
+      {failure && (
+        <Card title="This run failed — nothing was tested">
+          <p className="small" style={{ marginTop: 0 }}>{failure}</p>
+          <p className="small dim">
+            No findings were produced, so there is no rating to read. A provider that is rate-limited
+            or whose key has expired is the usual cause — which is why it is surfaced here instead of
+            showing as an empty room.
+          </p>
+          <div className="row">
+            <Link className="btn sm primary" to="/providers">Check providers</Link>
+            <Link className="btn sm" to="/agents">Configure a runtime</Link>
+          </div>
+        </Card>
+      )}
 
       <div className="war-grid">
         {/* ---------------- left: the agent under test ---------------- */}

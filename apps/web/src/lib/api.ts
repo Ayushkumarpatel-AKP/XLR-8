@@ -240,7 +240,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ scenarioId, ...opts }),
     }),
-  runAll: () => request<{ ran: number; missions: Mission[] }>("/demo/run", { method: "POST", body: "{}" }),
 
   // ---- trap library, receipts, freshness ledger ----
   traps: () => request<TrapLibrary>("/traps"),
@@ -340,6 +339,48 @@ export function useGlobalStream(): MissionEvent[] {
     return () => source.close();
   }, []);
   return events;
+}
+
+/** The only events that can change whether a mission is running. */
+const LIFECYCLE_EVENTS = new Set(["mission.started", "mission.finished", "mission.failed"]);
+
+/**
+ * Missions that are running right now.
+ *
+ * The event stream only says when to look — `Mission.status` is the source of
+ * truth. So we refresh on the three lifecycle events, and while something is in
+ * flight poll slowly as a safety net for a dropped stream. An idle app makes no
+ * requests at all.
+ */
+export function useRunningMissions(): { running: Mission[]; any: boolean } {
+  const [running, setRunning] = useState<Mission[]>([]);
+  const events = useGlobalStream();
+  const lifecycle = events.filter((e) => LIFECYCLE_EVENTS.has(e.type)).at(-1);
+
+  const refresh = useCallback(() => {
+    api
+      .missions()
+      .then((ms) => setRunning(ms.filter((m) => m.status === "running")))
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    if (lifecycle) refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lifecycle?.id, refresh]);
+
+  // If the stream drops mid-run, the glow must still go out.
+  useEffect(() => {
+    if (running.length === 0) return;
+    const t = window.setInterval(refresh, 2500);
+    return () => clearInterval(t);
+  }, [running.length, refresh]);
+
+  return { running, any: running.length > 0 };
 }
 
 /**

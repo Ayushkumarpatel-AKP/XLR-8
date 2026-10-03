@@ -90,6 +90,11 @@ export interface ProviderConfig {
   ollamaBaseUrl?: string;
   openaiCompatibleBaseUrl?: string;
   openaiCompatibleApiKey?: string;
+  /**
+   * How long a FAILED health result is trusted before it is probed again.
+   * A passing check is cached indefinitely. Defaults to 15s.
+   */
+  healthRetryMs?: number;
 }
 
 /** Config loader. Never throws on missing keys — reports unconfigured instead. */

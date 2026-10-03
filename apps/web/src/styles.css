@@ -112,6 +112,20 @@ button, input, select {
 .nav-item.active { background: var(--panel-2); color: var(--text); border-color: var(--border-strong); box-shadow: inset 2px 0 0 var(--orange); }
 .nav-icon { width: 16px; text-align: center; opacity: 0.85; }
 
+/* A running mission announces itself in the nav, and the item links straight to
+   it — you should never have to hunt for the live run or wonder whether one
+   started. */
+.nav-item.running { color: var(--text); border-color: rgba(235, 125, 0, 0.45); background: rgba(235, 125, 0, 0.08); animation: navGlow 1.8s ease-in-out infinite; }
+.nav-item.running.active { animation: none; border-color: var(--orange); box-shadow: inset 2px 0 0 var(--orange); }
+@keyframes navGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(235, 125, 0, 0); }
+  50% { box-shadow: 0 0 0 3px rgba(235, 125, 0, 0.16), 0 0 14px 0 rgba(235, 125, 0, 0.32); }
+}
+.nav-live {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 10.5px; font-weight: 700; color: var(--orange); font-variant-numeric: tabular-nums;
+}
+
 /* the scroll container — full width, so the scrollbar sits at the window edge */
 .main { display: flex; flex-direction: column; min-width: 0; height: 100%; overflow-y: auto; }
 /* banner + top bar stay pinned while the content scrolls */
@@ -746,6 +760,7 @@ input.input:focus, select.input:focus { outline: none; border-color: var(--orang
 }
 @media (prefers-reduced-motion: reduce) {
   .live-dot { animation: none; }
+  .nav-item.running { animation: none; border-color: var(--orange); }
 }
 
 /* ---- agent runtime panel (agents page) ---- */

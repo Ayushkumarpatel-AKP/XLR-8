@@ -14,7 +14,7 @@ import { VerifyPage } from "./pages/Verify.js";
 import { ThreatModelPage } from "./pages/ThreatModel.js";
 import { AlertBell } from "./components/AlertBell.js";
 import { agentLabel, useAgents } from "./lib/agent-context.js";
-import { useApi, api } from "./lib/api.js";
+import { useApi, useRunningMissions, api } from "./lib/api.js";
 
 /*
  * Grouped by what you are doing, not by which module implements it. The old
@@ -62,6 +62,11 @@ const NAV: Array<{ section: string; items: Array<{ to: string; label: string; ic
 
 function Sidebar() {
   const { targets, active } = useAgents();
+  // A mission in flight shows up here and the item links straight to it, so you
+  // never have to wonder whether something started or go looking for it.
+  const { running } = useRunningMissions();
+  const liveMission = running[0] ?? null;
+
   return (
     <aside className="sidebar">
       <Link className="brand" to="/dashboard" style={{ textDecoration: "none", color: "inherit" }}>
@@ -76,17 +81,31 @@ function Sidebar() {
       {NAV.map((group) => (
         <div key={group.section}>
           <div className="nav-section">{group.section}</div>
-          {group.items.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
-              end={item.to === "/agents"}
-            >
-              <span className="nav-icon">{item.icon}</span>
-              {item.label}
-            </NavLink>
-          ))}
+          {group.items.map((item) => {
+            const live = item.to === "/war-room/latest" && liveMission !== null;
+            return (
+              <NavLink
+                key={item.to}
+                to={live ? `/war-room/${liveMission.id}` : item.to}
+                className={({ isActive }) => `nav-item${isActive ? " active" : ""}${live ? " running" : ""}`}
+                end={item.to === "/agents"}
+                title={
+                  live
+                    ? `${running.length} mission${running.length === 1 ? "" : "s"} running — open the live run`
+                    : undefined
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                {item.label}
+                {live && (
+                  <span className="nav-live">
+                    <span className="live-dot" />
+                    {running.length > 1 ? running.length : "live"}
+                  </span>
+                )}
+              </NavLink>
+            );
+          })}
         </div>
       ))}
       <div className="spacer" />
