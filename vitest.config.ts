@@ -18,6 +18,7 @@ export default defineConfig({
       "@agentguard/mcp": r("./packages/mcp/src/index.ts"),
       "@agentguard/model-router": r("./packages/model-router/src/index.ts"),
       "@agentguard/demo-lab": r("./demo-lab/src/index.ts"),
+      "@agentguard/api": r("./services/api/src/context.ts"),
     },
   },
   test: {

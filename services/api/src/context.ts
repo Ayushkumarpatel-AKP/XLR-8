@@ -569,7 +569,14 @@ export function createApiContext(): ApiContext {
     const scenario = trapLibrary.find((s) => s.id === scenarioId);
     if (!scenario) return reply.code(400).send({ error: `unknown scenario: ${scenarioId}` });
 
-    const manifest = activeManifest(body.agentId);
+    // A trap exercises the sandbox agent by default. Naming an agentId targets
+    // that agent instead — but it must be drivable, and a refusal has to say so
+    // rather than silently resolving to whatever happens to be active.
+    const sandboxAgent = lab ? engine.getAgent(lab.agentId) : undefined;
+    const named = body.agentId ? engine.getAgent(body.agentId) : undefined;
+    if (body.agentId && !named) return reply.code(404).send({ error: `unknown agent: ${body.agentId}` });
+
+    const manifest = named ?? sandboxAgent ?? activeManifest();
     if (!manifest) {
       return reply.code(409).send({ error: "No agent is registered yet. Import one from the Agents page first." });
     }

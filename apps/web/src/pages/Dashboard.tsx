@@ -200,8 +200,9 @@ export function ScenarioLauncher({ onDone }: { onDone: (missionId: string) => vo
   // Which brief the demo agent runs under. The weak preset is the contrast case.
   const [profile, setProfile] = useState<"hardened" | "weak">("hardened");
 
-  // Scenarios belong to the built-in demo agent — warn when we're scoped elsewhere.
-  const switchesAgent = Boolean(active && active.examplePrompts.length === 0);
+  // Scenarios exercise the built-in sandbox agent. An agent with no runtime
+  // cannot be driven at all, so we must not aim a run at it.
+  const auditOnly = Boolean(active && !active.interactive);
 
   async function run(id: ScenarioId) {
     setBusy(id);
@@ -209,9 +210,19 @@ export function ScenarioLauncher({ onDone }: { onDone: (missionId: string) => vo
     try {
       // Start the mission and return as soon as the id exists — the room watches
       // the rest live instead of blocking on the whole run.
-      const agentId = active?.agentId;
-      const { missionId } = await api.startMission(id, { profile, ...(agentId ? { agentId } : {}) });
-      if (agentId) touch(agentId);
+      //
+      // Only name an agent when it can actually be driven. Passing an audit-only
+      // agent's id makes the server refuse the start, which used to dead-end the
+      // button: no navigation, so the War Room never opened.
+      const runnable = active?.interactive ? active.agentId : undefined;
+      const { missionId } = await api.startMission(id, { profile, ...(runnable ? { agentId: runnable } : {}) });
+      // Follow whichever agent actually ran, so the top bar matches the room.
+      try {
+        const started = await api.mission(missionId);
+        touch(started.agentId);
+      } catch {
+        /* the room loads the mission itself */
+      }
       onDone(missionId);
     } catch (e) {
       setError((e as Error).message);
@@ -222,7 +233,17 @@ export function ScenarioLauncher({ onDone }: { onDone: (missionId: string) => vo
 
   return (
     <div className="col">
-      {switchesAgent && (
+      {auditOnly ? (
+        <p className="small faint" style={{ margin: 0 }}>
+          <strong>{active?.name}</strong> has no runtime, so a trap cannot run against it — it is audited,
+          never called. Running a scenario below uses the built-in sandbox agent instead. To run traps
+          against {active?.name}, connect a runtime on the{" "}
+          <Link to="/agents" style={{ color: "var(--orange)" }}>
+            Agents page
+          </Link>
+          .
+        </p>
+      ) : (
         <p className="small faint" style={{ margin: 0 }}>
           These scenarios exercise the built-in demo agent — running one switches the app to it.
         </p>

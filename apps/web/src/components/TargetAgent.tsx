@@ -305,15 +305,11 @@ function AuditOnlyBody({
         </div>
       </div>
 
-      <div className="target-input">
-        <button
-          type="button"
-          className="btn primary"
-          style={{ flex: 1 }}
-          disabled={busy}
-          onClick={() => void audit()}
-        >
-          {busy ? "Auditing…" : `▶ Run static audit (${target.toolCount} tools, nothing executed)`}
+      {/* Not `.target-input`: that row is sized for a chat field and a 38px round
+          send button, so two text buttons laid out in it collided. */}
+      <div className="target-actions">
+        <button type="button" className="btn primary" disabled={busy} onClick={() => void audit()}>
+          {busy ? "Auditing…" : `▶ Run static audit (${target.toolCount})`}
         </button>
         <Link className="btn" to="/agents" title="Configure how to drive this agent — enables traps, chat and receipts">
           Connect a runtime

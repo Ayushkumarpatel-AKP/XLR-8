@@ -443,6 +443,14 @@ table.table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   background: transparent !important; border: 1px dashed #c8ced3 !important;
   color: #5f6368 !important; font-style: italic;
 }
+
+/* The audit-only panel's two actions. `.target-input` is a chat row — it sizes
+   its button to a 38px circle, so two text buttons placed in it collided. */
+.target-actions { display: flex; gap: 8px; margin-top: 12px; align-items: stretch; }
+.target-actions > .btn {
+  flex: 1; min-width: 0; padding: 8px 10px; font-size: 11.5px;
+  justify-content: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 @media (prefers-reduced-motion: reduce) {
   .dot-anim { animation: none; }
 }
