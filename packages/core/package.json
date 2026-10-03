@@ -1,0 +1,15 @@
+{
+  "name": "@agentguard/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@agentguard/contracts": "workspace:*",
+    "@agentguard/evidence": "workspace:*",
+    "@agentguard/policies": "workspace:*",
+    "@agentguard/graph": "workspace:*",
+    "@agentguard/drift": "workspace:*"
+  }
+}

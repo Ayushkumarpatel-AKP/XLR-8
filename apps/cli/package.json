@@ -1,0 +1,22 @@
+{
+  "name": "@agentguard/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "agentguard": "./bin/agentguard.mjs"
+  },
+  "main": "./src/index.ts",
+  "dependencies": {
+    "@agentguard/contracts": "workspace:*",
+    "@agentguard/core": "workspace:*",
+    "@agentguard/demo-lab": "workspace:*",
+    "@agentguard/evidence": "workspace:*",
+    "@agentguard/graph": "workspace:*",
+    "@agentguard/drift": "workspace:*",
+    "@agentguard/mcp": "workspace:*",
+    "@agentguard/model-router": "workspace:*",
+    "@agentguard/api": "workspace:*",
+    "commander": "^12.1.0"
+  }
+}

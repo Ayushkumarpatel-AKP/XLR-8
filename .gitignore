@@ -1,0 +1,29 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+
+.env
+.env.local
+.env.*.local
+
+# local runtime data
+.agentguard/
+data/
+*.sqlite
+*.db
+
+# editor / os
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# assistant session config
+.commandcode/
+
+# generated screenshots of local runs are kept, but not the browser profiles
+*.tmp
+
