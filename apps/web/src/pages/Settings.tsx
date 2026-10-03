@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   api,
   useAlerts,
@@ -7,6 +7,7 @@ import {
   type ChannelStatus,
   type NotificationSettings,
 } from "../lib/api.js";
+import { providerStatus } from "./System.js";
 import { Badge, Card, ErrorBox, Loading, PageHeader, SeverityBadge } from "../components/ui.js";
 import { fmtDateTime } from "../lib/format.js";
 import { ACCENTS, applyPrefs, loadPrefs, savePrefs, type Prefs } from "../lib/prefs.js";
@@ -28,7 +29,16 @@ const INVARIANTS = [
 ];
 
 export function SettingsPage() {
-  const [tab, setTab] = useState<Tab>("General");
+  // The tab lives in the URL so a tab is linkable and the back button works.
+  const [params, setParams] = useSearchParams();
+  const requested = params.get("tab");
+  const tab: Tab = TABS.find((t) => t.toLowerCase() === requested?.toLowerCase()) ?? "General";
+
+  function selectTab(next: Tab) {
+    const updated = new URLSearchParams(params);
+    updated.set("tab", next.toLowerCase());
+    setParams(updated);
+  }
 
   return (
     <div className="col">
@@ -36,7 +46,7 @@ export function SettingsPage() {
 
       <div className="tabs">
         {TABS.map((t) => (
-          <button key={t} className={`tab${tab === t ? " active" : ""}`} onClick={() => setTab(t)} type="button">
+          <button key={t} className={`tab${tab === t ? " active" : ""}`} onClick={() => selectTab(t)} type="button">
             {t}
           </button>
         ))}
@@ -79,8 +89,6 @@ function GeneralTab() {
           <dd>{health.data?.demoEnabled ? `loaded (${health.data.demoAgentId})` : "not loaded"}</dd>
           <dt>MCP platforms</dt>
           <dd>{runtime.data?.platforms.join(", ") || "—"}</dd>
-          <dt>Data directory</dt>
-          <dd>.agentguard</dd>
         </dl>
       </Card>
 
@@ -89,15 +97,27 @@ function GeneralTab() {
           <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
             <Link className="btn" to="/target">Open Agent Under Test</Link>
             <Link className="btn" to="/war-room/latest">Open War Room</Link>
-            <Link className="btn" to="/testing">Run a scenario</Link>
+            <Link className="btn" to="/dashboard">Run a scenario</Link>
           </div>
           <div className="row" style={{ gap: 8 }}>
-            <button className="btn" onClick={() => { void api.providers(); runtime.reload(); }}>
+            <button className="btn" onClick={runtime.reload}>
               Refresh runtime
             </button>
             <Link className="btn" to="/findings">Findings</Link>
           </div>
-          <p className="small faint" style={{ margin: 0 }}>
+          <p
+            className="small"
+            style={{
+              margin: 0,
+              padding: "10px 12px",
+              border: "1px solid var(--border-strong)",
+              borderLeft: "3px solid var(--high)",
+              borderRadius: "var(--radius-sm)",
+              background: "var(--panel)",
+              color: "var(--text)",
+              fontWeight: 600,
+            }}
+          >
             Mission data is held in memory for this API process; restarting clears it.
           </p>
         </div>
@@ -111,15 +131,19 @@ function GeneralTab() {
 function ModelsTab() {
   const providers = useApi(() => api.providers(), []);
   const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
   const [probe, setProbe] = useState<{ ok: boolean; providerId: string; kind: string; reply: string; note: string } | null>(null);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
 
   async function recheck() {
     setChecking(true);
+    setCheckError(null);
     try {
-      await api.providers();
+      await api.providersHealth();
       providers.reload();
+    } catch (e) {
+      setCheckError((e as Error).message);
     } finally {
       setChecking(false);
     }
@@ -155,19 +179,30 @@ function ModelsTab() {
         <table className="table">
           <thead><tr><th>Provider</th><th>Model</th><th>Tools</th><th>Status</th><th>Latency</th><th>Last check</th></tr></thead>
           <tbody>
-            {providers.data.map((p) => (
-              <tr key={p.id}>
-                <td className="mono">{p.id}</td>
-                <td className="mono tiny">{p.model}</td>
-                <td>{p.tools ? <Badge tone="low">tool calling</Badge> : <span className="faint tiny">—</span>}</td>
-                <td><Badge tone={p.health?.ok ? "ok" : "medium"}>{p.health?.ok ? "● connected" : "○ not connected"}</Badge></td>
-                <td className="tiny">{p.health?.latencyMs != null ? `${p.health.latencyMs}ms` : "—"}</td>
-                <td className="tiny faint">{p.health ? fmtDateTime(p.health.checkedAt) : "never"}</td>
-              </tr>
-            ))}
+            {providers.data.map((p) => {
+              const status = providerStatus(p.health);
+              return (
+                <tr key={p.id}>
+                  <td className="mono">{p.id}</td>
+                  <td className="mono tiny">{p.model}</td>
+                  <td>{p.tools ? <Badge tone="low">tool calling</Badge> : <span className="faint tiny">—</span>}</td>
+                  <td><Badge tone={status.tone}>{status.label}</Badge></td>
+                  <td className="tiny">{p.health?.latencyMs != null ? `${p.health.latencyMs}ms` : "—"}</td>
+                  <td className="tiny faint">{p.health ? fmtDateTime(p.health.checkedAt) : "never checked"}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
+        {providers.data.some((p) => p.health === null) && (
+          <p className="tiny faint" style={{ marginTop: 10, marginBottom: 0 }}>
+            “Not checked yet” means no health check has run for that provider in this process — unknown, not failed. Run
+            ↻ Re-check to find out.
+          </p>
+        )}
       </Card>
+
+      {checkError && <ErrorBox error={checkError} />}
 
       {probe && (
         <Card title="Live model probe">
@@ -244,7 +279,7 @@ function PoliciesTab() {
   const rules = [...policies.data.rules].sort((a, b) => a.priority - b.priority);
 
   return (
-    <Card title={`${policies.data.name} v${policies.data.version}`} sub="deterministic, code-evaluated · first match wins" right={<Link className="btn sm" to="/policies">Full page</Link>}>
+    <Card title={`${policies.data.name} v${policies.data.version}`} sub="deterministic, code-evaluated · first match wins">
       <table className="table">
         <thead><tr><th>Priority</th><th>Rule</th><th>Outcome</th><th>Severity</th></tr></thead>
         <tbody>
@@ -274,7 +309,7 @@ function SecurityTab() {
     const email = notifications.data?.channels.find((c) => c.channel === "email");
     const webhook = notifications.data?.channels.find((c) => c.channel === "webhook");
     return [
-      { key: "GROQ_API_KEY", state: providers.data?.some((p) => p.id === "groq" && p.health?.ok) ? "Configured" : "Not configured" },
+      { key: "GROQ_API_KEY", state: providers.data?.some((p) => p.id === "groq") ? "Configured" : "Not configured" },
       { key: "ALERT_WEBHOOK_URL", state: webhook?.configured ? "Configured" : "Not configured" },
       { key: "GMAIL_USER + GMAIL_APP_PASSWORD", state: email?.configured ? "Configured" : "Not configured" },
       { key: "SESSION_SECRET", state: "Not configured" },

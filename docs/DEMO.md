@@ -1,18 +1,24 @@
 # Demo & Presentation Guide
 
-Everything runs locally. Nothing contacts the network. All data is synthetic and
+Everything runs locally, and a pure demo run contacts nothing — the demo lab uses a mock
+agent, mock MCP tools and synthetic data. A *configured runtime* is different: a model
+provider, or an `http-chat` / `openai-compatible` runtime, makes real outbound model calls,
+and enabled alert channels dispatch real webhooks and email. All data is synthetic and
 labelled `DEMO / SANDBOX / NO REAL DATA`.
 
 ## Run it
 
 ```bash
 pnpm install
-pnpm demo                                   # all four scenarios, headless
+pnpm demo                                   # all 24 scenarios, headless
 pnpm exec tsx apps/cli/src/index.ts demo run --follow   # live CLI war room
 pnpm dev:api & pnpm dev:web                 # API + web app
 ```
 
-## The four scenarios
+## The 24 scenarios
+
+The library is 24 traps (`agentguard trap list` shows them all). The walkthrough below uses
+four of them:
 
 | Scenario | What the flawed agent does | What AgentGuard catches |
 | --- | --- | --- |

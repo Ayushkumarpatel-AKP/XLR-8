@@ -1,17 +1,38 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { api, useApi } from "../lib/api.js";
+import { useAgents } from "../lib/agent-context.js";
+import { fmtDateTime } from "../lib/format.js";
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, StatCard } from "../components/ui.js";
 
 export function DriftPage() {
   const drift = useApi(() => api.drift(), []);
-  const agents = useApi(() => api.agents(), []);
+  const { targets, active } = useAgents();
+  const [selected, setSelected] = useState(0);
 
   if (drift.error) return <ErrorBox error={drift.error} />;
   if (drift.loading) return <Loading label="Comparing snapshots…" />;
-  const event = drift.data?.[0];
-  if (!event) return <Empty>No drift data available.</Empty>;
 
-  const agent = agents.data?.[0];
+  const events = drift.data ?? [];
+  const index = Math.min(selected, Math.max(events.length - 1, 0));
+  const event = events[index];
+
+  if (!event) {
+    return (
+      <div className="col">
+        <PageHeader title="Permission Drift" sub="Two snapshots of one agent, diffed down to the exact permission that moved." />
+        <Empty>
+          No drift event exists for this agent yet — a baseline is stored the first time the agent is audited or
+          run. <Link to="/dashboard">Run a mission to capture a baseline</Link>, or{" "}
+          <Link to="/agents">pick a different agent</Link>.
+        </Empty>
+      </div>
+    );
+  }
+
+  const agent = targets.find((t) => t.agentId === event.agentId) ?? active;
+  // The fallback only names the agent when it really is the one this event is about.
+  const agentName = agent && agent.agentId === event.agentId ? agent.name : event.agentId;
   const positive = event.changes.filter((c) => c.riskDelta > 0);
   const negative = event.changes.filter((c) => c.riskDelta < 0);
 
@@ -19,19 +40,38 @@ export function DriftPage() {
     <div className="col">
       <PageHeader
         title="Permission Drift"
-        sub={`${agent?.name ?? event.agentId} · snapshot A → snapshot B`}
-        right={<Badge tone={event.riskDelta > 0 ? "critical" : "ok"}>risk delta {event.riskDelta > 0 ? "+" : ""}{event.riskDelta}</Badge>}
+        sub={`${agentName} · ${event.fromSnapshotId.slice(0, 16)}… → ${event.toSnapshotId.slice(0, 16)}… · compared ${fmtDateTime(event.createdAt)}`}
+        right={
+          <div className="row" style={{ gap: 8 }}>
+            <select
+              className="input"
+              aria-label="Drift event"
+              value={index}
+              onChange={(e) => setSelected(Number(e.target.value))}
+            >
+              {events.map((e, i) => (
+                <option key={e.id} value={i}>
+                  {fmtDateTime(e.createdAt)} · {e.fromSnapshotId.slice(0, 10)}… → {e.toSnapshotId.slice(0, 10)}…
+                </option>
+              ))}
+            </select>
+            <Badge tone={event.riskDelta > 0 ? "critical" : "ok"}>
+              risk delta {event.riskDelta > 0 ? "+" : ""}
+              {event.riskDelta}
+            </Badge>
+          </div>
+        }
       />
 
       <div className="grid cols-4">
-        <StatCard label="Version A" value="1.0.0" hint={event.fromSnapshotId.slice(0, 14)} />
-        <StatCard label="Version B" value="2.0.0" hint={event.toSnapshotId.slice(0, 14)} />
         <StatCard label="Changed capabilities" value={event.changedCapabilityCount} />
+        <StatCard label="Risk-increasing" value={positive.length} hint="changes that raised risk" />
+        <StatCard label="Risk-reducing" value={negative.length} hint="changes that lowered risk" />
         <StatCard
           label="Risk delta"
           value={`${event.riskDelta > 0 ? "+" : ""}${event.riskDelta}`}
           deltaDir={event.riskDelta > 0 ? "up" : "down"}
-          delta={`${positive.length} increasing`}
+          delta={`${event.newAttackSurface.length} new attack-surface categories`}
         />
       </div>
 
@@ -95,8 +135,7 @@ export function DriftPage() {
       )}
 
       <div className="row">
-        <Link className="btn" to="/graph">View Trust Graph</Link>
-        <Link className="btn" to="/blast-radius">View Blast Radius</Link>
+        <Link className="btn" to="/trust">View Trust &amp; Capability</Link>
       </div>
     </div>
   );

@@ -394,7 +394,7 @@ agentguard test run <scenario>          transcript + disclosures + scorecard (--
 agentguard swarm [missionId]            stage decisions + blackboard entries
 agentguard mission start <agent>        run a mission (--scenario, --follow)
 agentguard mission status|replay <id>   inspect / replay a mission
-agentguard demo init | run              the local demo lab (+ trend summary)
+agentguard demo run                     the local demo lab (+ trend summary)
 
 PROVE
 agentguard receipt issue [agentId]      seal the evidence (--scenario, --repeat N)
@@ -741,6 +741,7 @@ pnpm verify:live   # run every scenario against the real model and print what ha
 | [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) | dependency licenses |
 | [`ASSET_SOURCES.md`](ASSET_SOURCES.md) | every visual asset and its licence |
 | [`docs/reference/master-prompt.md`](docs/reference/master-prompt.md) | the original build specification |
+| [`docs/worklog/build.md`](docs/worklog/build.md) | the initial-build worklog (packages, tests, verification commands) |
 
 ---
 

@@ -22,7 +22,7 @@ running the agent.
 
 ## 2. What AgentGuard X does
 
-Four things, in a loop:
+Five things, in a loop:
 
 | # | Job | Output |
 |---|---|---|
@@ -287,11 +287,11 @@ same event stream** — there are no "CLI fake events" and no "web fake events".
 
 | Group | Count | Example |
 |---|---|---|
-| Leak & secret extraction | 6 | customer email, partner API key, system prompt |
+| Tool-policy & adversarial | 5 | approval bypass, permission drift, tool-chain exfiltration |
+| Leak & secret extraction | 5 | customer email, partner API key, system prompt |
 | Injection | 4 | indirect injection, jailbreak, encoding bypass, crescendo |
-| Policy & actions | 4 | approval bypass, privilege escalation, scope creep |
+| Policy & actions | 4 | verification bypass, privilege escalation, scope creep |
 | Robustness | 2 | refusal consistency, **over-refusal** (passing = the agent *helped*) |
-| Tool-chain / drift | 3 | exfiltration chain, permission drift |
 | **Autonomous misalignment** | 4 | blackmail under shutdown threat, insubordination, sabotage |
 
 The misalignment traps run with **no attacker model at all**: the agent works a synthetic

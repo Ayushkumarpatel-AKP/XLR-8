@@ -123,6 +123,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** One configured model provider, with the result of its most recent health check. */
+export interface ProviderStatusRow {
+  id: string;
+  kind: string;
+  model: string;
+  tools: boolean;
+  /** null until a check has run — not the same thing as a failed check. */
+  health: { ok: boolean; detail: string; latencyMs: number | null; checkedAt: string } | null;
+}
+
 export const api = {
   /** Real workspace state — agent count, the active agent, whether a sandbox is loaded. */
   health: () =>
@@ -167,22 +177,17 @@ export const api = {
   missionEvents: (id: string) => request<MissionEvent[]>(`/missions/${id}/events`),
   findings: () => request<Finding[]>("/findings"),
   evidence: () => request<EvidenceRecord[]>("/evidence"),
-  decisions: () => request<PolicyDecision[]>("/decisions"),
   graph: (agentId: string) => request<CapabilityGraph>(`/graph/${agentId}`),
   blastRadius: (agentId: string) => request<BlastRadius>(`/blast-radius/${agentId}`),
   drift: () => request<DriftEvent[]>("/drift"),
   policies: () => request<PolicySet>("/policies"),
-  providers: () =>
-    request<
-      Array<{
-        id: string;
-        kind: string;
-        model: string;
-        tools: boolean;
-        health: { ok: boolean; detail: string; latencyMs: number | null; checkedAt: string } | null;
-      }>
-    >("/providers"),
-  reports: () => request<Report[]>("/reports"),
+  /** The last known status of each provider. Cheap — reads stored state. */
+  providers: () => request<ProviderStatusRow[]>("/providers"),
+  /**
+   * Actually probes every provider and returns fresh statuses. Use this instead
+   * of fetching the endpoint by hand, so a failure surfaces like any other.
+   */
+  providersHealth: () => request<ProviderStatusRow[]>("/providers/health"),
   report: (missionId: string) => request<Report>("/reports", { method: "POST", body: JSON.stringify({ missionId }) }),
 
   // ---- alerts & notifications ----
@@ -234,13 +239,6 @@ export const api = {
     request<{ missionId: string }>("/missions/start", {
       method: "POST",
       body: JSON.stringify({ scenarioId, ...opts }),
-    }),
-  runMission: (scenarioId: ScenarioId, profile?: "hardened" | "weak") =>
-    request<Mission>("/missions", { method: "POST", body: JSON.stringify({ scenarioId, profile }) }),
-  runTest: (scenarioId: ScenarioId, profile?: "hardened" | "weak") =>
-    request<{ test: TestResult | null; missionId: string }>("/tests/run", {
-      method: "POST",
-      body: JSON.stringify({ scenarioId, profile }),
     }),
   runAll: () => request<{ ran: number; missions: Mission[] }>("/demo/run", { method: "POST", body: "{}" }),
 

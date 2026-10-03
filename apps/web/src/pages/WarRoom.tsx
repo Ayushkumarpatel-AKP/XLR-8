@@ -135,8 +135,21 @@ export function WarRoom() {
           {target ? (
             <TargetAgent key={target.agentId} target={target} onMission={handleNewMission} height={280} />
           ) : (
-            <Card title="Agent preview">
-              <span className="dim small">No agent selected — pick one in the top bar.</span>
+            <Card title="No agent to preview">
+              {/* "Pick one in the top bar" was advice the user could not take: the
+                  switcher is disabled while nothing is registered. */}
+              {allTargets.length === 0 ? (
+                <>
+                  <p className="small dim" style={{ marginTop: 0 }}>
+                    Nothing is registered in this workspace yet, so there is no agent to inspect.
+                  </p>
+                  <Link className="btn sm primary" to="/agents">
+                    Import an agent from GitHub
+                  </Link>
+                </>
+              ) : (
+                <span className="dim small">Select an agent in the top bar to inspect it here.</span>
+              )}
             </Card>
           )}
           {mission && (
@@ -169,13 +182,23 @@ export function WarRoom() {
           {error && <ErrorBox error={error} />}
           {!resolved ? (
             <Card title={target ? "No missions for this agent yet" : "No missions yet"}>
-              <span className="dim small">
-                {target
-                  ? target.interactive
+              {target ? (
+                <span className="dim small">
+                  {target.interactive
                     ? `Send a message to ${target.name} on the left to open a mission.`
-                    : `Run a static audit of ${target.name} on the left to open a mission.`
-                  : "No agents registered — import one from the Agents page."}
-              </span>
+                    : `Run a static audit of ${target.name} on the left to open a mission.`}
+                </span>
+              ) : (
+                <>
+                  <p className="small dim" style={{ marginTop: 0 }}>
+                    No agent is registered, so there is nothing to run a mission against. Import one —
+                    AgentGuard audits its declared surface first and never calls it.
+                  </p>
+                  <Link className="btn sm primary" to="/agents">
+                    Import an agent from GitHub
+                  </Link>
+                </>
+              )}
             </Card>
           ) : loading && !mission ? (
             <Loading label="Loading mission…" />

@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, useApi } from "../lib/api.js";
 import { useAgents } from "../lib/agent-context.js";
-import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, SeverityBadge } from "../components/ui.js";
+import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, SeverityBadge, StatCard } from "../components/ui.js";
 import { fmtTime } from "../lib/format.js";
+import { stateAtCursor } from "../lib/replay-state.js";
 import { useResolvedMission } from "./WarRoom.js";
 
 const STEP_ORDER = [
@@ -42,18 +43,30 @@ export function Replay() {
     return () => clearTimeout(t);
   }, [playing, cursor, speed, events.length]);
 
-  if (!resolved) return <Empty>No missions to replay. <Link to="/testing">Run one →</Link></Empty>;
+  if (!resolved) {
+    return (
+      <Empty>
+        <div className="col" style={{ gap: 10, alignItems: "center" }}>
+          <span>No missions to replay yet — a replay is built from a mission that has already run.</span>
+          <Link className="btn sm primary" to="/dashboard">
+            Run a scenario →
+          </Link>
+        </div>
+      </Empty>
+    );
+  }
   if (mission.error) return <ErrorBox error={mission.error} />;
   if (mission.loading && !mission.data) return <Loading label="Loading replay…" />;
   if (!mission.data) return <Empty>Mission not found.</Empty>;
 
   const visible = events.slice(0, cursor);
+  const state = stateAtCursor(mission.data, events, cursor);
 
   return (
     <div className="col">
       <PageHeader
         title="Agent Replay (Action Timeline)"
-        sub={`Deterministic replay from stored events · ${mission.data.agentName}`}
+        sub={`Step back through the recorded events of one mission · ${mission.data.agentName}`}
         right={<Link className="btn sm" to={`/war-room/${mission.data.id}`}>Back to War Room</Link>}
       />
 
@@ -85,6 +98,16 @@ export function Replay() {
           <span>{visible.at(-1) ? fmtTime(visible.at(-1)!.timestamp) : "—"}</span>
         </div>
       </Card>
+
+      <div className="grid cols-3">
+        <StatCard label="Findings" value={state.findings.length} hint="as of cursor" />
+        <StatCard label="Evidence" value={state.evidence.length} hint="as of cursor" />
+        <StatCard
+          label="Risk"
+          value={state.risk ? state.risk.score : "—"}
+          hint={state.risk ? state.risk.band : "not yet scored"}
+        />
+      </div>
 
       <div className="split">
         <Card title="Event Timeline" sub="scrubber follows real event order">
@@ -119,8 +142,8 @@ export function Replay() {
           </Card>
 
           <Card title="Findings (as of cursor)">
-            {visible.some((e) => e.type === "finding.created") ? (
-              (mission.data.findings ?? []).map((f) => (
+            {state.findings.length ? (
+              state.findings.map((f) => (
                 <div className="col" style={{ gap: 4, marginBottom: 10 }} key={f.id}>
                   <SeverityBadge severity={f.severity} />
                   <div className="small">{f.title}</div>

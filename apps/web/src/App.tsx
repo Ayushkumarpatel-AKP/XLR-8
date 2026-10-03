@@ -1,18 +1,14 @@
-import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { Link, Navigate, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { Dashboard } from "./pages/Dashboard.js";
 import { WarRoom } from "./pages/WarRoom.js";
 import { TargetPage } from "./pages/TargetPage.js";
 import { Replay } from "./pages/Replay.js";
 import { AgentsPage, AgentDetail } from "./pages/Agents.js";
-import { ToolsPage } from "./pages/Tools.js";
 import { FindingsPage } from "./pages/Findings.js";
 import { DriftPage } from "./pages/Drift.js";
-import { GraphPage } from "./pages/GraphPage.js";
-import { BlastRadiusPage } from "./pages/BlastRadius.js";
-import { TestingPage } from "./pages/Testing.js";
-import { PoliciesPage, ProvidersPage, ReportsPage } from "./pages/System.js";
+import { TrustPage } from "./pages/Trust.js";
+import { ProvidersPage, ReportsPage } from "./pages/System.js";
 import { SettingsPage } from "./pages/Settings.js";
-import { LandingPage } from "./pages/Landing.js";
 import { ReceiptsPage } from "./pages/Receipts.js";
 import { VerifyPage } from "./pages/Verify.js";
 import { ThreatModelPage } from "./pages/ThreatModel.js";
@@ -20,39 +16,38 @@ import { AlertBell } from "./components/AlertBell.js";
 import { agentLabel, useAgents } from "./lib/agent-context.js";
 import { useApi, api } from "./lib/api.js";
 
+/*
+ * Grouped by what you are doing, not by which module implements it. The old
+ * "Security" group held static incident prose, live posture, two views of one
+ * graph and read-only config — six unrelated things with no organising idea.
+ */
 const NAV: Array<{ section: string; items: Array<{ to: string; label: string; icon: string }> }> = [
   {
     section: "Operations",
     items: [
       { to: "/dashboard", label: "Dashboard", icon: "▚" },
-      { to: "/war-room/latest", label: "War Room", icon: "◉" },
       { to: "/target", label: "Agent Under Test", icon: "◍" },
+      { to: "/war-room/latest", label: "War Room", icon: "◉" },
       { to: "/replay/latest", label: "Replay", icon: "⇄" },
     ],
   },
   {
-    section: "Inventory",
+    section: "Agents",
+    items: [{ to: "/agents", label: "Agents", icon: "⛭" }],
+  },
+  {
+    section: "Evidence",
     items: [
-      { to: "/agents", label: "Agents", icon: "⛭" },
-      { to: "/tools", label: "Tool Monitoring", icon: "⚒" },
+      { to: "/findings", label: "Findings", icon: "⚑" },
+      { to: "/receipts", label: "Signed Receipts", icon: "▣" },
+      { to: "/drift", label: "Permission Drift", icon: "⇅" },
     ],
   },
   {
     section: "Security",
     items: [
+      { to: "/trust", label: "Trust & Capability", icon: "◈" },
       { to: "/threat-model", label: "Threat Model", icon: "☢" },
-      { to: "/findings", label: "Findings", icon: "⚑" },
-      { to: "/drift", label: "Permission Drift", icon: "⇅" },
-      { to: "/graph", label: "Trust Graph", icon: "◈" },
-      { to: "/blast-radius", label: "Blast Radius", icon: "◎" },
-      { to: "/policies", label: "Policies", icon: "§" },
-    ],
-  },
-  {
-    section: "Testing",
-    items: [
-      { to: "/testing", label: "Attack Scenarios", icon: "⚛" },
-      { to: "/receipts", label: "Signed Receipts", icon: "▣" },
     ],
   },
   {
@@ -69,7 +64,7 @@ function Sidebar() {
   const { targets, active } = useAgents();
   return (
     <aside className="sidebar">
-      <div className="brand">
+      <Link className="brand" to="/dashboard" style={{ textDecoration: "none", color: "inherit" }}>
         <div className="brand-mark">A</div>
         <div>
           <div className="brand-name">
@@ -77,7 +72,7 @@ function Sidebar() {
           </div>
           <div className="brand-sub">Control Plane</div>
         </div>
-      </div>
+      </Link>
       {NAV.map((group) => (
         <div key={group.section}>
           <div className="nav-section">{group.section}</div>
@@ -96,16 +91,20 @@ function Sidebar() {
       ))}
       <div className="spacer" />
       <div className="nav-section">Workspace</div>
-      <div className="nav-item" style={{ cursor: "default" }}>
+      {/* These were styled exactly like the links above but were inert divs. */}
+      <NavLink to="/agents" className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}>
         <span className={`badge ${targets.length > 0 ? "safe" : "medium"}`}>
           {targets.length} agent{targets.length === 1 ? "" : "s"} registered
         </span>
-      </div>
-      <div className="nav-item" style={{ cursor: "default" }}>
+      </NavLink>
+      <NavLink
+        to={active ? `/agents/${active.agentId}` : "/agents"}
+        className={({ isActive }) => `nav-item${isActive ? " active" : ""}`}
+      >
         <span className={`badge ${active ? (active.interactive ? "ok" : "medium") : ""}`}>
           {active ? `${active.interactive ? "●" : "○"} ${active.name}` : "no active agent"}
         </span>
-      </div>
+      </NavLink>
       <div className="tiny faint" style={{ padding: "8px 10px" }}>
         {active?.interactive
           ? "Sandbox runtime — traps execute locally against a mock agent. Nothing external is contacted."
@@ -145,7 +144,7 @@ function Topbar() {
     <header className="topbar">
       <div className="row">
         <h1>{titleFor(location.pathname)}</h1>
-        <span className="crumbs">/ {location.pathname.replace(/^\//, "") || "dashboard"}</span>
+        <span className="crumbs">{crumbsFor(location.pathname)}</span>
         {active && (
           <span className={`badge ${active.interactive ? "ok" : "medium"}`} title={active.sourceRef}>
             {active.interactive ? "●" : "○"} {active.name}
@@ -161,7 +160,11 @@ function Topbar() {
               : "○ static audit only"
             : "no agent registered"}
         </span>
-        <span className="badge ok">API {health.error ? "offline" : "connected"}</span>
+        {/* Not-yet-checked is a third state — it used to render as green "connected"
+            on every first paint, whatever the truth was. */}
+        <span className={`badge ${health.error ? "critical" : health.data ? "ok" : "info"}`}>
+          API {health.error ? "offline" : health.data ? "connected" : "checking…"}
+        </span>
         <AlertBell />
       </div>
     </header>
@@ -169,26 +172,34 @@ function Topbar() {
 }
 
 function titleFor(path: string): string {
-  if (path.startsWith("/war-room")) return "Live Security War Room";
+  // Match on the FIRST segment. Detail routes carry an id, and the old exact-match
+  // map made /agents/<id> and /replay/<id> fall through to the bare product name.
+  const root = `/${path.split("/").filter(Boolean)[0] ?? ""}`;
   const map: Record<string, string> = {
     "/dashboard": "Security Overview",
     "/agents": "Agent Inventory",
-    "/tools": "Tool Monitoring",
     "/threat-model": "Threat Model — Incidents Behind the Traps",
     "/findings": "Findings Center",
     "/drift": "Permission Drift",
-    "/graph": "Trust & Capability Graph",
-    "/blast-radius": "Blast Radius Simulator",
-    "/testing": "Attack Scenarios",
+    "/trust": "Trust & Capability",
     "/receipts": "Signed Receipts",
     "/target": "Agent Under Test",
-    "/policies": "Policies",
     "/providers": "Model Providers",
     "/reports": "Reports",
     "/settings": "Settings",
+    "/war-room": "Live Security War Room",
     "/replay": "Agent Replay",
+    "/verify": "Verify a Receipt",
   };
-  return map[path] ?? "AgentGuard X";
+  return map[root] ?? "AgentGuard X";
+}
+
+/** Breadcrumb: the section, plus a shortened id on detail routes. */
+function crumbsFor(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length === 0) return "";
+  const id = parts[1];
+  return `/ ${parts[0]}${id ? ` / ${id.length > 12 ? `${id.slice(0, 10)}…` : id}` : ""}`;
 }
 
 export function App() {
@@ -203,36 +214,42 @@ export function App() {
       <div className="main">
         <div className="main-head">
           <div className="banner-demo">
-            {active
-              ? active.interactive
-                ? "▲ Sandbox runtime — traps execute locally against a mock agent; nothing external is contacted"
-                : `▲ Static audit — ${active.sourceRef} is read, never called`
-              : "▲ No agent registered — import one from GitHub to begin"}
+            {active ? (
+              active.interactive ? (
+                "▲ Sandbox runtime — traps execute locally against a mock agent; nothing external is contacted"
+              ) : (
+                `▲ Static audit — ${active.sourceRef} is read, never called`
+              )
+            ) : (
+              <>
+                ▲ No agent registered — <Link to="/agents">import one from GitHub</Link> to begin
+              </>
+            )}
           </div>
           <Topbar />
         </div>
         <main className="content">
           <Routes>
-            <Route path="/" element={<LandingPage />} />
+            {/* There is no Landing page any more: it was a brochure that sat inside
+                the product shell, was not in NAV, and had no clickable way back in. */}
+            <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Dashboard />} />
             <Route path="/war-room/:missionId" element={<WarRoom />} />
             <Route path="/target" element={<TargetPage />} />
             <Route path="/replay/:missionId" element={<Replay />} />
             <Route path="/agents" element={<AgentsPage />} />
             <Route path="/agents/:id" element={<AgentDetail />} />
-            <Route path="/tools" element={<ToolsPage />} />
-            <Route path="/threat-model" element={<ThreatModelPage />} />
             <Route path="/findings" element={<FindingsPage />} />
             <Route path="/drift" element={<DriftPage />} />
-            <Route path="/graph" element={<GraphPage />} />
-            <Route path="/blast-radius" element={<BlastRadiusPage />} />
-            <Route path="/testing" element={<TestingPage />} />
+            <Route path="/trust" element={<TrustPage />} />
             <Route path="/receipts" element={<ReceiptsPage />} />
-            <Route path="/verify/:fingerprint" element={<VerifyPage />} />
-            <Route path="/policies" element={<PoliciesPage />} />
+            <Route path="/threat-model" element={<ThreatModelPage />} />
             <Route path="/providers" element={<ProvidersPage />} />
             <Route path="/reports" element={<ReportsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            {/* Without this, an unknown path rendered the shell around an empty
+                content area. /verify/:id is handled above, outside the shell. */}
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
           </Routes>
         </main>
       </div>

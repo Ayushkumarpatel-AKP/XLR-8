@@ -522,22 +522,8 @@ mission
   });
 
 // ---- tests ----------------------------------------------------------------
+// The library is listed once, by `trap list`; `test` only runs a trap.
 const test = program.command("test").description("stress-test scenarios");
-test
-  .command("list")
-  .description("list available scenarios (same as `trap list`)")
-  .action(() => {
-    const scenarios = listScenarios();
-    emit(
-      scenarios,
-      [
-        ...renderTrapLibrary(scenarios),
-        "",
-        ansi.gray("  detail on one trap, including its planted secrets:  agentguard trap show <id>"),
-      ].join("\n"),
-    );
-  });
-
 test
   .command("run [suite]")
   .description("run one trap and print the attacker transcript, the disclosures and the scorecard")
@@ -659,8 +645,8 @@ program
   });
 
 // ---- drift ----------------------------------------------------------------
-program
-  .command("drift")
+const driftCmd = program.command("drift").description("compare an agent's posture against a baseline");
+driftCmd
   .command("check [agentId]")
   .description("compare an agent's posture against its baseline (or two manifest files)")
   .option("--from <file>", "manifest JSON for snapshot A")
@@ -736,6 +722,11 @@ program
     ];
     emit(drift, lines.join("\n"));
   });
+
+// Bare `agentguard drift` prints the drift help instead of silently doing nothing.
+driftCmd.action(() => {
+  driftCmd.outputHelp();
+});
 
 // ---- graph / blast radius -------------------------------------------------
 program
@@ -878,18 +869,6 @@ program
 
 // ---- demo -----------------------------------------------------------------
 const demo = program.command("demo").description("run the local demo lab");
-demo.command("init").description("initialise the demo lab").action(() => {
-  const app = createCliApp();
-  emit(
-    { agentId: app.lab.agentId, scenarios: listScenarios().map((s) => s.id) },
-    [
-      ansi.bold(ansi.orange("DEMO LAB")),
-      `${ansi.green("✓")} agent: ${app.lab.manifest.name}`,
-      `${ansi.green("✓")} scenarios: ${listScenarios().map((s) => s.id).join(", ")}`,
-      ansi.gray("All local · synthetic data · no real actions"),
-    ].join("\n"),
-  );
-});
 
 demo
   .command("run")
@@ -1034,7 +1013,7 @@ receiptCmd
     emit({ receipt: sealed, encoded }, lines.join("\n"));
   });
 
-async function showReceipt(payload: string): Promise<void> {
+async function verifyReceipt(payload: string): Promise<void> {
   const raw = existsSync(payload) ? readFileSync(payload, "utf8").trim() : payload;
   let decoded: ReturnType<typeof decodeReceipt>;
   try {
@@ -1072,10 +1051,9 @@ async function showReceipt(payload: string): Promise<void> {
 }
 
 receiptCmd
-  .command("show <payload>")
+  .command("verify <payload>")
   .description("decode and verify a receipt (compact payload, JSON, or a file)")
-  .action(showReceipt);
-receiptCmd.command("verify <payload>").description("alias for `receipt show`").action(showReceipt);
+  .action(verifyReceipt);
 
 // ---- freshness ledger -----------------------------------------------------
 program

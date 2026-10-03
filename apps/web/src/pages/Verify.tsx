@@ -107,6 +107,15 @@ export function VerifyPage() {
             The URL claims <span className="mono tiny">{fingerprint?.slice(0, 30)}…</span> but the signed payload says{" "}
             <span className="mono tiny">{receipt?.fingerprint.slice(0, 30)}…</span>. Treat it as untrustworthy.
           </p>
+          <div className="row" style={{ gap: 8 }}>
+            <Link className="btn sm" to="/">
+              Back to AgentGuard X
+            </Link>
+          </div>
+          <p className="dim small" style={{ marginBottom: 0 }}>
+            Ask the issuer for the receipt again: the link was edited, re-pointed at another receipt, or assembled
+            by hand. Nothing on this page can repair it.
+          </p>
         </div>
       </div>
     );
@@ -134,7 +143,9 @@ export function VerifyPage() {
             <div className="stat-label">Signature</div>
             <div className="stat-value">{signatureValid ? "VALID" : "INVALID"}</div>
             <div className="tiny faint">
-              Ed25519, verified in this browser against the key inside the receipt.
+              Ed25519, verified in this browser against the key inside the receipt. That key travelled with the
+              receipt, so this proves the payload has not been altered since it was signed — it does not prove who
+              signed it; only the issuer's published key (or a copy you obtained out of band) can establish that.
             </div>
           </div>
           <div className={`verify-flag ${freshness?.reachable ? (superseded ? "warn" : "ok") : "warn"}`}>

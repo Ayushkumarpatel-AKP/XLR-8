@@ -1,19 +1,13 @@
-import { fromBase64Url, toBase64Url, type Receipt } from "@agentguard/receipt/shared";
+import { fromBase64Url, type Receipt } from "@agentguard/receipt/shared";
 
 /* ------------------------------------------------------------------ *
  * Browser-side transport codec for receipts.
  *
  * Raw DEFLATE keeps the shareable link small enough to paste anywhere. The
  * server writes the same format with node:zlib, so a link produced on either
- * side opens on the other.
+ * side opens on the other. Only decoding lives here: the browser always receives
+ * the encoded payload ready-made from the API.
  * ------------------------------------------------------------------ */
-
-export async function encodeReceipt(receipt: Receipt): Promise<string> {
-  const bytes = new TextEncoder().encode(JSON.stringify(receipt));
-  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate-raw"));
-  const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
-  return toBase64Url(compressed);
-}
 
 export async function decodeReceipt(encoded: string): Promise<Receipt> {
   const bytes = fromBase64Url(encoded);

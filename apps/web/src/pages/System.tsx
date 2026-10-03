@@ -1,7 +1,20 @@
-import { useEffect, useState } from "react";
-import { api, useApi } from "../lib/api.js";
-import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, SeverityBadge } from "../components/ui.js";
-import { fmtDateTime } from "../lib/format.js";
+import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import type { Mission, Report } from "@agentguard/contracts";
+import { api, useApi, type ProviderStatusRow } from "../lib/api.js";
+import { agentLabel, useAgents } from "../lib/agent-context.js";
+import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, SeverityBadge, SeverityLegend, StatCard } from "../components/ui.js";
+import { fmtDateTime, SEVERITY_ORDER, shortId } from "../lib/format.js";
+
+/**
+ * The one place that decides what a provider's status means. Null health means
+ * no check has EVER run — unknown, not failed — so it must not read the same as
+ * a failed check. Shared with Settings → Models.
+ */
+export function providerStatus(health: ProviderStatusRow["health"]): { label: string; tone: string } {
+  if (!health) return { label: "○ Not checked yet", tone: "info" };
+  return health.ok ? { label: "● Connected", tone: "ok" } : { label: "○ Check failed", tone: "critical" };
+}
 
 export function PoliciesPage() {
   const policies = useApi(() => api.policies(), []);
@@ -37,58 +50,43 @@ export function PoliciesPage() {
 }
 
 export function ProvidersPage() {
-  const providers = useApi(() => api.providers(), []);
-  const [checking, setChecking] = useState(false);
+  // Probe on mount: without one every provider has null health, which is not the
+  // same as a failing provider. Going through api.providersHealth() means a
+  // probe failure lands in `providers.error` instead of vanishing.
+  const providers = useApi(() => api.providersHealth(), []);
 
-  async function recheck() {
-    setChecking(true);
-    try {
-      await fetch("/api/providers/health");
-      providers.reload();
-    } finally {
-      setChecking(false);
-    }
-  }
-
-  // A provider's status is the LAST health check, and it is null until one has
-  // run. Without a check on mount every provider reads as disconnected even when
-  // it is fine, so the page runs one itself.
-  useEffect(() => {
-    void (async () => {
-      await fetch("/api/providers/health");
-      providers.reload();
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  if (providers.error) return <ErrorBox error={providers.error} />;
-  if (providers.loading || !providers.data) return <Loading label="Checking providers…" />;
+  if (providers.error && !providers.data) return <ErrorBox error={providers.error} />;
+  if (!providers.data) return <Loading label="Checking providers…" />;
 
   return (
     <div className="col">
       <PageHeader
         title="Model Providers"
         sub="Only providers whose health check succeeded are shown as connected."
-        right={<button className="btn" disabled={checking} onClick={recheck}>{checking ? "Checking…" : "↻ Re-check"}</button>}
+        right={
+          <button className="btn" disabled={providers.loading} onClick={providers.reload}>
+            {providers.loading ? "Checking…" : "↻ Re-check"}
+          </button>
+        }
       />
+      {providers.error && <ErrorBox error={providers.error} />}
       <Card title="Configured Providers">
         <table className="table">
           <thead><tr><th>Provider</th><th>Model</th><th>Type</th><th>Status</th><th>Latency</th><th>Last checked</th></tr></thead>
           <tbody>
-            {providers.data.map((p) => (
-              <tr key={p.id}>
-                <td className="mono">{p.id}</td>
-                <td className="mono tiny">{p.model}</td>
-                <td className="tiny dim">{p.kind}</td>
-                <td>
-                  <Badge tone={p.health ? (p.health.ok ? "ok" : "critical") : "info"}>
-                    {p.health ? (p.health.ok ? "● Connected" : "○ Check failed") : "○ Not checked yet"}
-                  </Badge>
-                </td>
-                <td className="tiny">{p.health?.latencyMs != null ? `${p.health.latencyMs}ms` : "—"}</td>
-                <td className="tiny faint">{p.health ? fmtDateTime(p.health.checkedAt) : "never"}</td>
-              </tr>
-            ))}
+            {providers.data.map((p) => {
+              const status = providerStatus(p.health);
+              return (
+                <tr key={p.id}>
+                  <td className="mono">{p.id}</td>
+                  <td className="mono tiny">{p.model}</td>
+                  <td className="tiny dim">{p.kind}</td>
+                  <td><Badge tone={status.tone}>{status.label}</Badge></td>
+                  <td className="tiny">{p.health?.latencyMs != null ? `${p.health.latencyMs}ms` : "—"}</td>
+                  <td className="tiny faint">{p.health ? fmtDateTime(p.health.checkedAt) : "never checked"}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </Card>
@@ -102,40 +100,151 @@ export function ProvidersPage() {
   );
 }
 
-export function ReportsPage() {
-  const missions = useApi(() => api.missions(), []);
-  const [report, setReport] = useState<Awaited<ReturnType<typeof api.report>> | null>(null);
-  const [busy, setBusy] = useState(false);
+function findingsBySeverity(mission: Mission): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const finding of mission.findings) counts[finding.severity] = (counts[finding.severity] ?? 0) + 1;
+  return counts;
+}
 
-  async function generate(missionId: string) {
+function reportMarkdown(report: Report, mission: Mission): string {
+  const counts = findingsBySeverity(mission);
+  const lines = [
+    `# Security report — ${mission.agentName}`,
+    "",
+    `- Scenario: ${mission.title} (${mission.scenarioId})`,
+    `- Mission: ${mission.id}`,
+    `- Kind: ${report.kind}`,
+    `- Generated: ${report.generatedAt}`,
+    `- Risk: ${mission.risk ? `${mission.risk.score}/100 (${mission.risk.band})` : "not scored"}`,
+    `- Findings: ${mission.findings.length} (${SEVERITY_ORDER.map((s) => `${s}: ${counts[s] ?? 0}`).join(", ")})`,
+    `- Tests run: ${mission.tests.length}`,
+    "",
+  ];
+  for (const section of report.sections) {
+    lines.push(`## ${section.heading}`, "", section.body, "");
+  }
+  return lines.join("\n");
+}
+
+function downloadJson(filename: string, data: unknown): void {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function verdictTone(status: string): string {
+  if (status === "PASS") return "ok";
+  if (status === "WARN" || status === "BLOCKED") return "medium";
+  return "critical";
+}
+
+export function ReportsPage() {
+  const { active, activeAgentId } = useAgents();
+  const missions = useApi(() => api.missions(), []);
+  const [report, setReport] = useState<Report | null>(null);
+  const [mission, setMission] = useState<Mission | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const visible = useMemo(
+    () => (missions.data ?? []).filter((m) => activeAgentId === null || m.agentId === activeAgentId),
+    [missions.data, activeAgentId],
+  );
+
+  // A report belongs to the mission it was generated from, so it must not
+  // outlive a switch to a different agent.
+  const shown =
+    report && mission && (activeAgentId === null || mission.agentId === activeAgentId) ? { report, mission } : null;
+
+  async function generate(m: Mission) {
     setBusy(true);
+    setError(null);
+    setCopied(false);
     try {
-      setReport(await api.report(missionId));
+      const next = await api.report(m.id);
+      setReport(next);
+      setMission(m);
+    } catch (e) {
+      setError((e as Error).message);
     } finally {
       setBusy(false);
     }
   }
 
+  async function copyMarkdown() {
+    if (!shown) return;
+    if (typeof navigator.clipboard?.writeText !== "function") {
+      setError("This browser blocks clipboard access — use Download JSON instead.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(reportMarkdown(shown.report, shown.mission));
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   return (
     <div className="col">
-      <PageHeader title="Reports" sub="Every metric is computed from stored mission data — nothing is hardcoded." />
+      <PageHeader
+        title="Reports"
+        sub={`Every number is computed from stored mission data — ${active ? agentLabel(active) : "all agents"}.`}
+      />
 
-      <Card title="Missions">
-        {missions.loading ? (
+      {error && <ErrorBox error={error} />}
+
+      <Card title="Missions" sub={missions.data ? `${visible.length} of ${missions.data.length} mission(s) shown` : undefined}>
+        {missions.error ? (
+          <ErrorBox error={missions.error} />
+        ) : missions.loading && !missions.data ? (
           <Loading />
-        ) : (missions.data ?? []).length === 0 ? (
-          <Empty>No missions yet.</Empty>
+        ) : visible.length === 0 ? (
+          <Empty>
+            <div>
+              {missions.data && missions.data.length > 0
+                ? "No missions for this agent yet — switch agents or run a scenario against it."
+                : "No missions yet."}
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <Link className="btn sm primary" to="/dashboard">
+                Run a scenario
+              </Link>
+            </div>
+          </Empty>
         ) : (
           <table className="table">
-            <thead><tr><th>Mission</th><th>Scenario</th><th>Risk</th><th>Findings</th><th></th></tr></thead>
+            <thead><tr><th>Mission</th><th>Scenario</th><th>When</th><th>Risk</th><th>Findings</th><th></th></tr></thead>
             <tbody>
-              {(missions.data ?? []).map((m) => (
+              {visible.map((m) => (
                 <tr key={m.id}>
-                  <td className="mono tiny">{m.id.slice(0, 14)}…</td>
-                  <td className="tiny">{m.scenarioId}</td>
-                  <td>{m.risk?.score ?? "—"}</td>
+                  <td className="mono tiny">{shortId(m.id)}</td>
+                  <td className="tiny">
+                    {m.title}
+                    <div className="tiny faint">{m.scenarioId}</div>
+                  </td>
+                  <td className="tiny faint">{fmtDateTime(m.finishedAt ?? m.createdAt)}</td>
+                  <td>
+                    {m.risk ? (
+                      <span className="row" style={{ gap: 6 }}>
+                        <span className="mono tiny">{m.risk.score}</span>
+                        <Badge tone={m.risk.band}>{m.risk.band}</Badge>
+                      </span>
+                    ) : (
+                      <span className="tiny faint">not scored</span>
+                    )}
+                  </td>
                   <td>{m.findings.length}</td>
-                  <td className="right"><button className="btn sm" disabled={busy} onClick={() => generate(m.id)}>Generate</button></td>
+                  <td className="right">
+                    <button className="btn sm" disabled={busy} onClick={() => void generate(m)}>
+                      Generate
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -143,26 +252,97 @@ export function ReportsPage() {
         )}
       </Card>
 
-      {report && (
-        <Card title={`Report ${report.id}`} sub={`${report.kind} · generated ${fmtDateTime(report.generatedAt)}`} right={<Badge tone="ok">ready</Badge>}>
+      {shown && (
+        <Card
+          title={shown.mission.agentName}
+          sub={`${shown.report.kind} report · generated ${fmtDateTime(shown.report.generatedAt)} · ${shown.mission.title} (${shown.mission.scenarioId})`}
+          right={
+            <div className="row" style={{ gap: 8 }}>
+              <button className="btn sm" onClick={() => void copyMarkdown()}>
+                {copied ? "✓ Copied" : "Copy as Markdown"}
+              </button>
+              <button
+                className="btn sm primary"
+                onClick={() => downloadJson(`agentguard-report-${shown.report.id}.json`, { report: shown.report, mission: shown.mission })}
+              >
+                ↓ Download JSON
+              </button>
+            </div>
+          }
+        >
+          <div className="grid cols-3" style={{ marginBottom: 16 }}>
+            <StatCard
+              label="Risk score"
+              value={shown.mission.risk ? `${shown.mission.risk.score}/100` : "—"}
+              hint={shown.mission.risk ? `${shown.mission.risk.band} band` : "this mission carries no risk score"}
+            />
+            <StatCard
+              label="Tests run"
+              value={shown.mission.tests.length}
+              hint={shown.mission.tests.length ? `${verdictCount(shown.mission, "PASS")} passed` : "no scenario executed"}
+            />
+            <StatCard
+              label="Findings"
+              value={shown.mission.findings.length}
+              hint={`${shown.mission.evidence.length} evidence record(s) · ${shown.mission.decisions.length} policy decision(s)`}
+            />
+          </div>
+
           <div className="grid cols-2">
             <div>
-              <div className="card-title">Metrics</div>
-              <pre className="mono tiny" style={{ whiteSpace: "pre-wrap", color: "var(--text-dim)" }}>
-                {JSON.stringify(report.metrics, null, 2)}
-              </pre>
+              <div className="card-title">Findings by severity</div>
+              {shown.mission.findings.length === 0 ? (
+                <p className="small dim" style={{ marginTop: 6 }}>
+                  No findings — posture within policy.
+                </p>
+              ) : (
+                <SeverityLegend counts={findingsBySeverity(shown.mission)} />
+              )}
+
+              <div className="card-title" style={{ marginTop: 18 }}>
+                Tests run ({shown.mission.tests.length})
+              </div>
+              {shown.mission.tests.length === 0 ? (
+                <p className="small dim" style={{ marginTop: 6 }}>
+                  No scenario was executed for this mission.{" "}
+                  <Link to="/dashboard">Run one from the dashboard</Link> to give the report behaviour to describe.
+                </p>
+              ) : (
+                <table className="table">
+                  <thead><tr><th>Scenario</th><th>Verdict</th><th>Severity</th><th>Duration</th></tr></thead>
+                  <tbody>
+                    {shown.mission.tests.map((t) => (
+                      <tr key={t.executionId}>
+                        <td className="tiny">
+                          {t.title}
+                          <div className="tiny faint">{t.scenarioId}</div>
+                        </td>
+                        <td><Badge tone={verdictTone(t.status)}>{t.status}</Badge></td>
+                        <td><SeverityBadge severity={t.severity} /></td>
+                        <td className="tiny">{t.durationMs}ms</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
+
             <div>
-              {report.sections.map((s) => (
+              {shown.report.sections.map((s) => (
                 <div key={s.heading} style={{ marginBottom: 12 }}>
                   <div className="card-title">{s.heading}</div>
                   <p className="small" style={{ whiteSpace: "pre-wrap", marginTop: 4 }}>{s.body}</p>
                 </div>
               ))}
+              <div className="tiny faint">Report {shown.report.id}</div>
             </div>
           </div>
         </Card>
       )}
     </div>
   );
+}
+
+function verdictCount(mission: Mission, status: string): number {
+  return mission.tests.filter((t) => t.status === status).length;
 }

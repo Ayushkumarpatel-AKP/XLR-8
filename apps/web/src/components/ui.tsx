@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import type { Mission, MissionEvent, SwarmAgentStatus } from "@agentguard/contracts";
+import type { MissionEvent, SwarmAgentStatus } from "@agentguard/contracts";
 import { fmtTime, SEVERITY_ORDER, severityRank } from "../lib/format.js";
 
 export function Card({ title, sub, right, children, className = "" }: {
@@ -174,11 +174,6 @@ export function PageHeader({ title, sub, right }: { title: string; sub?: string;
       {right}
     </div>
   );
-}
-
-export function MissionStatusPill({ mission }: { mission: Mission }) {
-  const tone = mission.status === "completed" ? "ok" : mission.status === "running" ? "medium" : "info";
-  return <Badge tone={tone}>{mission.status}</Badge>;
 }
 
 export function highestSeverity(findings: Array<{ severity: string }>): string {

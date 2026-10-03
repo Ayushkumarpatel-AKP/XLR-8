@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import type { Finding } from "@agentguard/contracts";
 import { api, useApi } from "../lib/api.js";
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, SeverityBadge, StatCard } from "../components/ui.js";
@@ -20,11 +21,18 @@ export function FindingsPage() {
     .filter((f) => status === "all" || f.status === status)
     .sort((a, b) => severityRank(a.severity) - severityRank(b.severity));
 
-  const counts = SEVERITY_ORDER.reduce((acc, s) => ({ ...acc, [s]: all.filter((f) => f.severity === s).length }), {} as Record<string, number>);
+  const counts = SEVERITY_ORDER.reduce((acc, s) => ({ ...acc, [s]: filtered.filter((f) => f.severity === s).length }), {} as Record<string, number>);
 
   return (
     <div className="col">
       <PageHeader title="Findings Center" sub="Every finding is backed by evidence — no AI-only conclusions." />
+
+      <div className="row between" style={{ marginBottom: 8 }}>
+        <div className="card-title">Severity in the current filter</div>
+        <div className="card-sub">
+          showing {filtered.length} of {all.length} findings · severity {severity} · status {status}
+        </div>
+      </div>
 
       <div className="grid cols-5">
         {SEVERITY_ORDER.map((s) => (
@@ -49,9 +57,32 @@ export function FindingsPage() {
         </div>
       </Card>
 
-      <Card title={`Findings (${filtered.length})`}>
+      <Card
+        title={`Findings — ${filtered.length} of ${all.length}`}
+        sub="The table shows only the findings that pass the filters above."
+      >
         {filtered.length === 0 ? (
-          <Empty>No findings match. Run a mission from Attack Scenarios.</Empty>
+          all.length === 0 ? (
+            <Empty>
+              No findings have been recorded for this agent yet.{" "}
+              <Link to="/dashboard">Run a mission from the Dashboard</Link> — everything it reports comes with the
+              evidence that produced it.
+            </Empty>
+          ) : (
+            <Empty>
+              None of the {all.length} findings pass the current filter (severity {severity}, status {status}).{" "}
+              <button
+                className="btn sm"
+                onClick={() => {
+                  setSeverity("all");
+                  setStatus("all");
+                }}
+              >
+                Clear filters
+              </button>{" "}
+              or <Link to="/dashboard">run another mission</Link> to look for different ones.
+            </Empty>
+          )
         ) : (
           <table className="table">
             <thead>

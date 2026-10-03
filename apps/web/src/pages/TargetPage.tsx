@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import type { Mission } from "@agentguard/contracts";
 import { api, useApi, useEventPulses, useMissionStream } from "../lib/api.js";
 import { agentLabel, useAgents } from "../lib/agent-context.js";
@@ -44,21 +44,25 @@ export function TargetPage() {
         sub="Pick any registered agent — the whole app follows your choice. Interactive agents can be talked to; imported agents are audited statically."
         right={
           <div className="row">
-            <select
-              className="input"
-              value={activeId ?? ""}
-              onChange={(e) => {
-                setActiveAgentId(e.target.value || null);
-                setMission(null);
-                setPinned(null);
-              }}
-            >
-              {(targets ?? []).map((t) => (
-                <option key={t.agentId} value={t.agentId}>
-                  {agentLabel(t)}
-                </option>
-              ))}
-            </select>
+            {/* An empty <select> is an inert control, so only offer it once there
+                is something to choose. */}
+            {targets.length > 0 && (
+              <select
+                className="input"
+                value={activeId ?? ""}
+                onChange={(e) => {
+                  setActiveAgentId(e.target.value || null);
+                  setMission(null);
+                  setPinned(null);
+                }}
+              >
+                {targets.map((t) => (
+                  <option key={t.agentId} value={t.agentId}>
+                    {agentLabel(t)}
+                  </option>
+                ))}
+              </select>
+            )}
             {mission && (
               <button className="btn sm" onClick={() => navigate(`/war-room/${mission.id}`)}>
                 Open War Room →
@@ -69,8 +73,15 @@ export function TargetPage() {
       />
 
       {!target ? (
-        <Card title="No agents">
-          <span className="dim small">Nothing registered yet — import one from the Agents page.</span>
+        <Card title="No agent is registered yet">
+          <p className="small dim" style={{ marginTop: 0 }}>
+            Point AgentGuard at a GitHub repo — an OpenAPI/Swagger spec, or a manifest with a{" "}
+            <span className="mono">tools</span> array — and it reads the declared capability surface
+            without ever calling it. Connect a runtime afterwards and you can drive it too.
+          </p>
+          <Link className="btn primary" to="/agents">
+            Import an agent from GitHub
+          </Link>
         </Card>
       ) : (
         <div className="target-grid">

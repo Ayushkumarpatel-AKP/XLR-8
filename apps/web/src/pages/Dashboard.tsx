@@ -1,9 +1,9 @@
-import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import type { ScenarioId } from "@agentguard/contracts";
 import { api, useApi, useGlobalStream } from "../lib/api.js";
 import { useAgents } from "../lib/agent-context.js";
-import { Badge, Card, Empty, ErrorBox, EventConsole, Loading, PageHeader, RiskDial, SeverityLegend, StatCard, highestSeverity } from "../components/ui.js";
+import { Badge, Card, Empty, ErrorBox, EventConsole, Loading, PageHeader, SeverityBadge, SeverityLegend, StatCard, highestSeverity } from "../components/ui.js";
 import { shortId } from "../lib/format.js";
 
 function Sparkline({ values, height = 44 }: { values: number[]; height?: number }) {
@@ -30,6 +30,8 @@ export function Dashboard() {
   const navigate = useNavigate();
   const [running, setRunning] = useState(false);
   const { activeAgentId, active, setActiveAgentId, touch } = useAgents();
+  // An audit-only agent has no runtime, so no trap can be aimed at it.
+  const auditOnly = Boolean(active && !active.interactive);
 
   // When an agent is active, the whole dashboard describes that agent.
   const missions = useMemo(
@@ -54,6 +56,7 @@ export function Dashboard() {
   for (const f of findings) severityCounts[f.severity]++;
 
   const openFindings = findings.filter((f) => f.status === "open");
+  const testedMissions = missions.filter((m) => m.tests.length > 0);
 
   async function runAll() {
     setRunning(true);
@@ -80,6 +83,10 @@ export function Dashboard() {
             GitHub (an OpenAPI/Swagger spec or a manifest with a <span className="mono">tools</span> array) to
             populate this workspace with real data.
           </p>
+          <p className="small dim">
+            AgentGuard X audits an agent's declared surface — its tools, permissions and reach — then runs
+            controlled traps against a runtime you own. Nothing is ever called without a runtime you configure.
+          </p>
           <Link className="btn primary" to="/agents">Import an agent from GitHub</Link>
         </Card>
       </div>
@@ -103,17 +110,34 @@ export function Dashboard() {
               </button>
             )}
             <button className="btn" onClick={() => { missionsRaw.reload(); findingsRaw.reload(); agents.reload(); }}>↻ Refresh</button>
-            <button className="btn primary" disabled={running} onClick={runAll}>
+            <button
+              className="btn primary"
+              disabled={running}
+              onClick={runAll}
+              title={auditOnly ? `Runs the built-in sandbox agent — ${active?.name} has no runtime to drive` : "Runs the built-in sandbox agent"}
+            >
               {running ? "Running…" : "▶ Run Security Mission"}
             </button>
           </div>
         }
       />
 
+      {auditOnly && (
+        <p className="small faint" style={{ margin: "-4px 0 0" }}>
+          <strong>{active?.name}</strong> has no runtime, so this run cannot be aimed at it: <strong>Run Security
+          Mission</strong> uses the built-in sandbox agent and switches the workspace to it. To run traps against{" "}
+          {active?.name},{" "}
+          <Link to="/agents" style={{ color: "var(--orange)" }}>
+            connect a runtime on the Agents page
+          </Link>
+          .
+        </p>
+      )}
+
       <div className="grid cols-5">
         <StatCard label="Agents" value={agentList.length} hint={active ? "selected" : "discovered"} />
         <StatCard label="Tools" value={agentList.reduce((s, a) => s + a.tools.length, 0)} hint="capabilities" />
-        <StatCard label="MCP Servers" value={agentList.reduce((s, a) => s + a.mcpServers.length, 0)} hint="connected" />
+        <StatCard label="MCP Servers" value={agentList.reduce((s, a) => s + a.mcpServers.length, 0)} hint="declared" />
         <StatCard
           label="Findings"
           value={openFindings.length}
@@ -137,13 +161,8 @@ export function Dashboard() {
           </div>
         </Card>
 
-        <Card title="Findings by Severity" sub={highestSeverity(openFindings) === "info" ? "no open findings" : `highest: ${highestSeverity(openFindings)}`}>
-          <div className="row" style={{ gap: 20, alignItems: "center" }}>
-            <RiskDial score={latest?.risk?.score ?? 0} band={latest?.risk?.band ?? "low"} size={124} />
-            <div style={{ flex: 1 }}>
-              <SeverityLegend counts={severityCounts} />
-            </div>
-          </div>
+        <Card title="Findings by Severity" sub={findings.length === 0 ? "no findings yet" : `${findings.length} finding(s) · highest: ${highestSeverity(findings)}`}>
+          <SeverityLegend counts={severityCounts} />
         </Card>
       </div>
 
@@ -154,8 +173,8 @@ export function Dashboard() {
           ) : sortedMissions.length === 0 ? (
             <Empty>
               {active
-                ? `No missions for ${active.name} yet — run one from the Agent Under Test page.`
-                : "No missions yet. Run a security mission to populate the dashboard."}
+                ? <>No missions for {active.name} yet — run one from the <Link to="/target">Agent Under Test</Link> page.</>
+                : <>No missions yet. Run a security mission from the <Link to="/target">Agent Under Test</Link> page to populate the dashboard.</>}
             </Empty>
           ) : (
             <table className="table">
@@ -188,6 +207,42 @@ export function Dashboard() {
       <Card title="Attack Scenarios" sub="controlled, local, repeatable">
         <ScenarioLauncher onDone={(id) => navigate(`/war-room/${id}`)} />
       </Card>
+
+      <Card title="Test Results" sub="deterministic grading from the stress agent">
+        {missionsRaw.error && <ErrorBox error={missionsRaw.error} />}
+        {missionsRaw.loading ? (
+          <Loading />
+        ) : testedMissions.length === 0 ? (
+          <Empty>
+            No test runs yet. Run a scenario above against the built-in sandbox agent, or{" "}
+            <Link to="/agents">connect a runtime you own on the Agents page</Link>.
+          </Empty>
+        ) : (
+          <table className="table">
+            <thead>
+              <tr><th>Scenario</th><th>Status</th><th>Severity</th><th>Tools</th><th>Duration</th><th>Model</th><th></th></tr>
+            </thead>
+            <tbody>
+              {testedMissions.map((m) => {
+                const t = m.tests[0];
+                return (
+                  <tr key={m.id}>
+                    <td>{t.title}</td>
+                    <td><Badge tone={t.status === "PASS" ? "ok" : t.status === "WARN" ? "medium" : "critical"}>{t.status}</Badge></td>
+                    <td><SeverityBadge severity={t.severity} /></td>
+                    <td className="mono tiny">{t.toolRequests.join(", ")}</td>
+                    <td>{t.durationMs}ms</td>
+                    <td className="mono tiny">{t.model}</td>
+                    <td className="right">
+                      <Link className="btn sm" to={`/war-room/${m.id}`}>War Room</Link>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Card>
     </div>
   );
 }
@@ -199,6 +254,18 @@ export function ScenarioLauncher({ onDone }: { onDone: (missionId: string) => vo
   const [error, setError] = useState<string | null>(null);
   // Which brief the demo agent runs under. The weak preset is the contrast case.
   const [profile, setProfile] = useState<"hardened" | "weak">("hardened");
+
+  const [searchParams] = useSearchParams();
+  const requested = searchParams.get("scenario");
+  const [highlight, setHighlight] = useState<string | null>(null);
+
+  // Deep link from the Threat Model: /dashboard?scenario=<trapId>. Only light up
+  // an id the API actually returned, so a stale link cannot highlight nothing real.
+  useEffect(() => {
+    if (!requested || !(scenarios.data ?? []).some((s) => s.id === requested)) return;
+    setHighlight(requested);
+    document.getElementById(`scenario-${requested}`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [requested, scenarios.data]);
 
   // Scenarios exercise the built-in sandbox agent. An agent with no runtime
   // cannot be driven at all, so we must not aim a run at it.
@@ -275,7 +342,15 @@ export function ScenarioLauncher({ onDone }: { onDone: (missionId: string) => vo
       {error && <ErrorBox error={error} />}
       <div className="grid cols-2">
         {(scenarios.data ?? []).map((s) => (
-          <div className="card" key={s.id} style={{ background: "var(--panel)" }}>
+          <div
+            className="card"
+            key={s.id}
+            id={`scenario-${s.id}`}
+            style={{
+              background: "var(--panel)",
+              ...(highlight === s.id ? { borderColor: "var(--orange)", boxShadow: "0 0 0 1px var(--orange)" } : {}),
+            }}
+          >
             <div className="row between">
               <div style={{ fontWeight: 700 }}>{s.title}</div>
               <Badge tone="low">{s.id}</Badge>

@@ -130,7 +130,8 @@ export function AgentsPage() {
 
   if (agents.error) return <ErrorBox error={agents.error} />;
   if (agents.loading) return <Loading label="Loading agents…" />;
-  if (!agents.data?.length) return <Empty>No agents registered.</Empty>;
+
+  const list = agents.data ?? [];
 
   return (
     <div className="col">
@@ -139,7 +140,7 @@ export function AgentsPage() {
         sub="Every agent, its model, tools and current posture — including agents imported from GitHub."
         right={
           <div className="row">
-            <span className="badge">{agents.data.length} agent(s)</span>
+            <span className="badge">{list.length} agent(s)</span>
             <Link className="btn sm" to="/target">Agent Under Test</Link>
           </div>
         }
@@ -147,53 +148,67 @@ export function AgentsPage() {
 
       <ImportFromGitHub onImported={() => agents.reload()} />
 
-      <div className="grid cols-3">
-        {agents.data.map((a) => {
-          const latest = missions.data?.filter((m) => m.agentId === a.id).sort((x, y) => (x.createdAt < y.createdAt ? 1 : -1))[0];
-          const openFindings = latest?.findings.filter((f) => f.status === "open") ?? [];
-          const imported = a.annotations?.importedFrom;
-          const open = openRuntime === a.id;
-          return (
-            <Card
-              key={a.id}
-              title={a.name}
-              sub={`v${a.version} · ${imported ? `imported · ${a.tools.length} tools` : a.model}`}
-              right={<Badge tone={latest?.risk?.band === "critical" ? "critical" : "ok"}>{latest?.risk?.band ?? "n/a"}</Badge>}
-              className={open ? "runtime-open" : ""}
-            >
-              <p className="small dim">{a.description}</p>
-              {imported && <div className="tiny faint mono truncate" style={{ marginTop: 4 }}>{imported}</div>}
-              <div className="row between tiny dim" style={{ margin: "10px 0" }}>
-                <span>{a.tools.length} tools</span>
-                <span>{a.mcpServers.length} MCP</span>
-                <span>{openFindings.length} findings</span>
-                <span>{a.runtime ? `runtime: ${a.runtime.kind}` : "audit-only"}</span>
-              </div>
-              <div className="row between">
-                <span className="row" style={{ gap: 6 }}>
-                  {openFindings.slice(0, 1).map((f) => <SeverityBadge key={f.id} severity={f.severity} />)}
-                </span>
-                <span className="row" style={{ gap: 6 }}>
-                  <button className="btn sm" onClick={() => setOpenRuntime(open ? null : a.id)}>
-                    {open ? "Close runtime" : "Runtime"}
-                  </button>
-                  <AuditButton agentId={a.id} />
-                  <Link className="btn sm" to={`/agents/${a.id}`}>Inspect →</Link>
-                </span>
-              </div>
-              {open && (
-                <RuntimePanel
-                  agent={a}
-                  onSaved={() => {
-                    agents.reload();
-                    reloadTargets();
-                  }}
-                />
-              )}
-            </Card>
-          );
-        })}
-      </div>
+      {list.length === 0 ? (
+        <Card title="No agents registered yet">
+          <p className="small dim" style={{ marginTop: 0 }}>
+            Import one above: an OpenAPI/Swagger spec, or an agent manifest with a{" "}
+            <span className="mono">tools</span> array. Nothing is executed — AgentGuard reads the declared
+            capability surface and audits it.
+          </p>
+          <div className="row" style={{ gap: 8 }}>
+            <Link className="btn sm" to="/">What AgentGuard audits →</Link>
+            <Link className="btn sm" to="/settings">Configure a model provider →</Link>
+          </div>
+        </Card>
+      ) : (
+        <div className="grid cols-3">
+          {list.map((a) => {
+            const latest = missions.data?.filter((m) => m.agentId === a.id).sort((x, y) => (x.createdAt < y.createdAt ? 1 : -1))[0];
+            const openFindings = latest?.findings.filter((f) => f.status === "open") ?? [];
+            const imported = a.annotations?.importedFrom;
+            const open = openRuntime === a.id;
+            return (
+              <Card
+                key={a.id}
+                title={a.name}
+                sub={`v${a.version} · ${imported ? `imported · ${a.tools.length} tools` : a.model}`}
+                right={<Badge tone={latest?.risk?.band === "critical" ? "critical" : "ok"}>{latest?.risk?.band ?? "n/a"}</Badge>}
+                className={open ? "runtime-open" : ""}
+              >
+                <p className="small dim">{a.description}</p>
+                {imported && <div className="tiny faint mono truncate" style={{ marginTop: 4 }}>{imported}</div>}
+                <div className="row between tiny dim" style={{ margin: "10px 0" }}>
+                  <span>{a.tools.length} tools</span>
+                  <span>{a.mcpServers.length} MCP</span>
+                  <span>{openFindings.length} findings</span>
+                  <span>{a.runtime ? `runtime: ${a.runtime.kind}` : "audit-only"}</span>
+                </div>
+                <div className="row between">
+                  <span className="row" style={{ gap: 6 }}>
+                    {openFindings.slice(0, 1).map((f) => <SeverityBadge key={f.id} severity={f.severity} />)}
+                  </span>
+                  <span className="row" style={{ gap: 6 }}>
+                    <button className="btn sm" onClick={() => setOpenRuntime(open ? null : a.id)}>
+                      {open ? "Close runtime" : "Runtime"}
+                    </button>
+                    <AuditButton agentId={a.id} />
+                    <Link className="btn sm" to={`/agents/${a.id}`}>Inspect →</Link>
+                  </span>
+                </div>
+                {open && (
+                  <RuntimePanel
+                    agent={a}
+                    onSaved={() => {
+                      agents.reload();
+                      reloadTargets();
+                    }}
+                  />
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -227,14 +242,15 @@ export function AgentDetail() {
   const { id } = useParams();
   const data = useApi(() => api.agent(id!), [id]);
   const missions = useApi(() => api.missions(), []);
-  const tools = useApi(() => api.tools(), []);
+  const { activeAgentId, setActiveAgentId } = useAgents();
 
   if (data.error) return <ErrorBox error={data.error} />;
   if (data.loading) return <Loading label="Loading agent…" />;
-  if (!data.data) return <Empty>Agent not found.</Empty>;
+  if (!data.data) return <Empty>Agent not found. <Link to="/agents">Back to all agents →</Link></Empty>;
 
-  const { agent, risk, findings } = data.data;
+  const { agent, interactive, risk, findings } = data.data;
   const agentMissions = (missions.data ?? []).filter((m) => m.agentId === agent.id);
+  const isActive = activeAgentId === agent.id;
 
   return (
     <div className="col">
@@ -244,10 +260,41 @@ export function AgentDetail() {
         right={
           <div className="row">
             <Badge tone={risk?.band === "critical" ? "critical" : "ok"}>risk {risk?.score ?? "—"}</Badge>
-            <Link className="btn sm primary" to="/testing">Run Mission</Link>
+            <Badge tone={interactive ? "ok" : "medium"}>{interactive ? "● live runtime" : "○ audit-only"}</Badge>
+            {interactive ? (
+              <Link className="btn sm primary" to="/dashboard">Run Mission</Link>
+            ) : (
+              <>
+                <AuditButton agentId={agent.id} />
+                <Link
+                  className="btn sm"
+                  to="/dashboard"
+                  title="This agent has no runtime — a mission there drives the built-in sandbox agent, not this one"
+                >
+                  Run sandbox mission
+                </Link>
+              </>
+            )}
           </div>
         }
       />
+
+      <div className="row between" style={{ gap: 10, flexWrap: "wrap", marginBottom: 18 }}>
+        <span className="small">
+          <strong>Runtime:</strong>{" "}
+          <span className="dim">
+            {interactive
+              ? "drivable — this agent has a runtime, so AgentGuard can connect to it and run traps against it."
+              : "audit-only — no runtime is configured, so this agent's declared surface is read and never called; scenario missions exercise the built-in sandbox agent instead."}
+          </span>
+        </span>
+        {!isActive && (
+          <span className="row" style={{ gap: 8 }}>
+            <Badge tone="medium">not the active agent</Badge>
+            <button className="btn sm" onClick={() => setActiveAgentId(agent.id)}>Set active</button>
+          </span>
+        )}
+      </div>
 
       <div className="grid cols-4">
         <StatCard label="Tools" value={agent.tools.length} />
@@ -282,7 +329,20 @@ export function AgentDetail() {
         <div className="col">
           <Card title="Recent Missions">
             {agentMissions.length === 0 ? (
-              <span className="dim small">No missions for this agent yet.</span>
+              <div className="col" style={{ gap: 8 }}>
+                <span className="dim small">No missions for this agent yet.</span>
+                {interactive ? (
+                  <Link className="btn sm" to="/dashboard">Run a mission →</Link>
+                ) : (
+                  <Link
+                    className="btn sm"
+                    to="/dashboard"
+                    title="Missions drive the built-in sandbox agent; use Audit above to statically audit this one"
+                  >
+                    Run a sandbox mission →
+                  </Link>
+                )}
+              </div>
             ) : (
               <table className="table">
                 <thead><tr><th>Mission</th><th>Scenario</th><th>Risk</th><th></th></tr></thead>
@@ -302,7 +362,10 @@ export function AgentDetail() {
 
           <Card title="Findings">
             {findings.length === 0 ? (
-              <span className="dim small">No findings.</span>
+              <div className="col" style={{ gap: 8 }}>
+                <span className="dim small">No findings for this agent.</span>
+                <Link className="btn sm" to="/findings">See all findings →</Link>
+              </div>
             ) : (
               <div className="col" style={{ gap: 8 }}>
                 {findings.slice(0, 5).map((f) => (
@@ -316,10 +379,6 @@ export function AgentDetail() {
           </Card>
         </div>
       </div>
-
-      <Card title="All Tools (fleet)">
-        <div className="tiny faint">{tools.data?.length ?? 0} tools across all agents.</div>
-      </Card>
     </div>
   );
 }

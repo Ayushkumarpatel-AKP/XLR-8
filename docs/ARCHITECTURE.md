@@ -43,8 +43,8 @@ mcp       → contracts
 model-router → contracts
 core      → contracts, policies, evidence, graph, drift, model-router
 demo-lab  → contracts, core, mcp, model-router
-api       → core, demo-lab, contracts, evidence, graph, drift
-cli       → core, demo-lab, contracts, mcp, model-router, api
+api       → core, demo-lab, contracts, drift, mcp, receipt, sarif
+cli       → core, demo-lab, contracts, mcp, model-router, receipt, sarif, api
 web       → contracts (types only)
 ```
 

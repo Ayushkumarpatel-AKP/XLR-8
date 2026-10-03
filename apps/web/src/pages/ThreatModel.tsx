@@ -92,7 +92,12 @@ export function ThreatModelPage() {
               <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                 <span className="tiny faint">Probed by</span>
                 {incident.coveredTrapIds.map((trapId) => (
-                  <Link key={trapId} className="chip mono" to="/testing" title={`Run scenario: ${trapId}`}>
+                  <Link
+                    key={trapId}
+                    className="chip mono"
+                    to={`/dashboard?scenario=${encodeURIComponent(trapId)}`}
+                    title={`Open the dashboard launcher with scenario ${trapId} preselected`}
+                  >
                     {trapId}
                   </Link>
                 ))}

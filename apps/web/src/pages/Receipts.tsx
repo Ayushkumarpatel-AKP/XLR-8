@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import type { Receipt } from "@agentguard/receipt/shared";
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, StatCard } from "../components/ui.js";
 import { api, useApi } from "../lib/api.js";
@@ -170,7 +171,7 @@ export function ReceiptsPage() {
   );
 
   async function issue() {
-    if (!active) return;
+    if (!active || !active.interactive) return;
     setBusy(true);
     setError(null);
     try {
@@ -214,7 +215,7 @@ export function ReceiptsPage() {
         <StatCard
           label="Issued this session"
           value={issued.length}
-          hint="signature verifies client-side"
+          hint="open a receipt's link to check its signature on /verify"
         />
       </div>
 
@@ -239,7 +240,11 @@ export function ReceiptsPage() {
                 </option>
               ))}
             </select>
-            <button className="btn primary sm" onClick={() => void issue()} disabled={busy || !active}>
+            <button
+              className="btn primary sm"
+              onClick={() => void issue()}
+              disabled={busy || !active || !active.interactive}
+            >
               {busy ? "Sealing…" : "Issue receipt"}
             </button>
           </div>
@@ -249,6 +254,19 @@ export function ReceiptsPage() {
           A receipt is only issued from evidence that already exists. With one trial the 95% upper bound is
           wide and honest; it tightens as clean trials accumulate.
         </div>
+        {active && !active.interactive && (
+          <div className="small dim" style={{ marginTop: 8 }}>
+            <strong>{active.name}</strong> is audit-only: it is read statically and never called, so no behavioural
+            evidence exists to seal. <Link to="/agents">Connect a runtime</Link> to issue receipts for it, or switch
+            to an agent that already has one.
+          </div>
+        )}
+        {!active && (
+          <div className="small dim" style={{ marginTop: 8 }}>
+            No single agent is selected, so there is nothing to seal.{" "}
+            <Link to="/agents">Register or import an agent</Link>, then pick it in the switcher above.
+          </div>
+        )}
         {error && <ErrorBox error={error} />}
       </Card>
 
@@ -256,7 +274,8 @@ export function ReceiptsPage() {
 
       {issued.length === 0 ? (
         <Empty>
-          No receipt yet. Run a mission against the agent under test, then seal the result here.
+          No receipt yet. <Link to="/dashboard">Run a mission against the agent under test</Link>, then seal the
+          result here.
         </Empty>
       ) : (
         <div className="col" style={{ gap: 14 }}>
@@ -271,7 +290,12 @@ export function ReceiptsPage() {
       <Card title="Freshness ledger" sub="One pointer per agent identity. The newest row is CURRENT; every earlier one is superseded.">
         {ledger.loading && <Loading />}
         {ledger.error && <ErrorBox error={ledger.error} />}
-        {ledger.data && ledger.data.history.length === 0 && <Empty>No receipts have been issued for this agent yet.</Empty>}
+        {ledger.data && ledger.data.history.length === 0 && (
+          <Empty>
+            No receipts have been issued for this agent yet.{" "}
+            <Link to="/dashboard">Run a mission</Link> to collect evidence, then issue one above.
+          </Empty>
+        )}
         {ledger.data && ledger.data.history.length > 0 && (
           <table className="table">
             <thead>
