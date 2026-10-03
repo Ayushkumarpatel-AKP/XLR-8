@@ -119,7 +119,7 @@ export function WarRoom() {
         {/* ---------------- left: the agent under test ---------------- */}
         <div className="war-left col">
           {target ? (
-            <TargetAgent key={target.agentId} target={target} onMission={handleNewMission} height={430} />
+            <TargetAgent key={target.agentId} target={target} onMission={handleNewMission} height={280} />
           ) : (
             <Card title="Agent preview">
               <span className="dim small">No agent selected — pick one in the top bar.</span>
@@ -140,8 +140,14 @@ export function WarRoom() {
             trap={activeTrap ? { canaries: activeTrap.canaries } : null}
             hits={test?.canaryHits ?? null}
             turns={test?.redteam?.turns ?? null}
-            height={220}
+            height={180}
           />
+
+          {mission && (
+            <Card title="Evidence" sub="content-addressed · hover a block for its digest">
+              <EvidenceStrip evidence={mission.evidence} />
+            </Card>
+          )}
         </div>
 
         {/* ---------------- right: mission control ---------------- */}
@@ -192,7 +198,7 @@ export function WarRoom() {
                 right={<Badge tone="ok">● live</Badge>}
                 className="war-console"
               >
-                <EventConsole events={liveEvents} height={340} />
+                <EventConsole events={liveEvents} height={236} />
               </Card>
 
               <div className="war-bottom">
@@ -213,25 +219,18 @@ export function WarRoom() {
                   <ToolFlow calls={toolFlow} />
                 </Card>
               </div>
+
+              <Card title="Agent Activity Timeline" sub="last events, scrolls">
+                <div className="scroll-y" style={{ maxHeight: 320 }}>
+                  <Timeline events={liveEvents.slice(-40)} />
+                </div>
+              </Card>
             </>
           ) : (
             <Empty>Mission not found.</Empty>
           )}
         </div>
       </div>
-
-      {mission && (
-        <div className="war-foot">
-          <Card title="Agent Activity Timeline" sub="last events, scrolls">
-            <div className="scroll-y" style={{ maxHeight: 360 }}>
-              <Timeline events={liveEvents.slice(-40)} />
-            </div>
-          </Card>
-          <Card title="Evidence" sub="content-addressed · hover a block for its digest">
-            <EvidenceStrip evidence={mission.evidence} />
-          </Card>
-        </div>
-      )}
     </div>
   );
 }

@@ -379,26 +379,69 @@ table.table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-/* war room — mission control layout */
-.war-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); gap: 16px; align-items: start; }
-.war-left { position: sticky; top: 16px; }
-.war-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr); gap: 16px; align-items: start; }
-.war-bottom { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-.war-foot { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-.war-risk-body { display: flex; align-items: center; gap: 16px; justify-content: center; }
-.war-risk-side { display: flex; flex-direction: column; gap: 7px; min-width: 92px; }
+/* war room — mission control layout
+   Two columns, both stretched to the same height, every panel the same gutter
+   apart. There is no full-width row: that is what made the old layout ragged. */
+.war-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.28fr); gap: 12px; align-items: stretch; }
+.war-left { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.war-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 12px; align-items: stretch; }
+.war-bottom { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 12px; align-items: stretch; }
+.war-risk-body { display: flex; align-items: center; gap: 14px; justify-content: center; }
+.war-risk-side { display: flex; flex-direction: column; gap: 6px; min-width: 84px; }
+
+/* Every direct child of a war column owns its own height; stretch keeps the
+   boxes in a row the same height so the grid reads as a grid. */
+.war-grid > .col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.war-top > .card, .war-bottom > .card { display: flex; flex-direction: column; }
+/* A panel that is empty should look deliberately empty, not half-drawn. */
+.war-bottom .flow.empty { flex: 1; justify-content: center; align-items: center; }
+
+/* Compact the panels inside the war room only. */
+.war-grid .card { padding: 12px; }
+.war-grid .card-head { margin-bottom: 8px; }
+.war-grid .card-title { font-size: 13px; }
+.war-grid .card-sub { font-size: 11px; }
+.war-grid .swarm-list { gap: 4px; }
+.war-grid .swarm-item { padding: 4px 8px; }
+.war-left .card { padding: 12px; }
 
 .mission-strip {
   display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
+  padding: 6px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
 }
 
 .war-console .console { border-radius: 8px; }
 
 @media (max-width: 1200px) {
   .war-grid { grid-template-columns: 1fr; }
-  .war-left { position: static; }
-  .war-top, .war-bottom, .war-foot { grid-template-columns: 1fr; }
+  .war-top, .war-bottom { grid-template-columns: 1fr; }
+}
+
+/* ---- leak monitor ---- */
+.leak-rows { display: flex; flex-direction: column; gap: 5px; }
+.leak-row {
+  border: 1px solid var(--border); border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm); background: var(--panel); padding: 5px 8px;
+}
+.leak-row.hit { background: var(--panel-2); }
+.leak-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.leak-row-head .badge { flex: none; }
+.leak-row-label {
+  flex: 1; min-width: 0; font-weight: 600; font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.leak-row-body {
+  display: flex; align-items: baseline; gap: 8px; min-width: 0;
+  margin-top: 2px; padding-left: 16px;
+}
+.leak-quote {
+  flex: 1; min-width: 0; font-family: var(--mono); font-size: 11px; color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.target-quick-more {
+  background: transparent !important; border: 1px dashed #c8ced3 !important;
+  color: #5f6368 !important; font-style: italic;
 }
 @media (prefers-reduced-motion: reduce) {
   .dot-anim { animation: none; }

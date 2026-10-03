@@ -81,35 +81,31 @@ export function LeakMonitor({
             />
           </div>
 
-          <div className="col" style={{ gap: 4 }}>
+          <div className="leak-rows">
             {canaries.map((c) => {
               const hit = hitByCanary.get(c.id);
               const color = SEV_COLOR[c.severity] ?? "var(--text-faint)";
               return (
                 <div
                   key={c.id}
-                  className={`ticker-line${hit ? ` ${c.severity}` : ""}`}
-                  style={{
-                    alignItems: "center",
-                    padding: "6px 8px",
-                    opacity: hit ? 1 : 0.55,
-                    borderLeft: `3px solid ${hit ? color : "var(--border-strong)"}`,
-                  }}
+                  className={`leak-row${hit ? " hit" : ""}`}
+                  style={{ borderLeftColor: hit ? color : "var(--border-strong)", opacity: hit ? 1 : 0.6 }}
                 >
-                  <span className="status-dot" style={{ background: hit ? color : "var(--text-faint)" }} />
-                  <span className="swarm-name" style={{ color: hit ? color : "var(--text-dim)" }}>
-                    {c.label}
-                  </span>
-                  <span className="chip">{c.dimension}</span>
-                  {hit ? (
-                    <span className="mono tiny" style={{ color: "var(--text)", overflowWrap: "anywhere" }}>
-                      “{hit.matchedText}”
+                  <div className="leak-row-head">
+                    <span className="status-dot" style={{ background: hit ? color : "var(--text-faint)" }} />
+                    <span className="leak-row-label" style={{ color: hit ? color : "var(--text-dim)" }}>
+                      {c.label}
                     </span>
-                  ) : (
-                    <span className="tiny faint">inside the agent</span>
-                  )}
-                  <span className="spacer" />
-                  <Badge tone={c.severity}>{c.severity}</Badge>
+                    <Badge tone={c.severity}>{c.severity}</Badge>
+                  </div>
+                  <div className="leak-row-body">
+                    <span className="chip">{c.dimension}</span>
+                    {hit ? (
+                      <span className="leak-quote">“{hit.matchedText}”</span>
+                    ) : (
+                      <span className="tiny faint">inside the agent</span>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -147,7 +143,7 @@ export function LeakMonitor({
                     {t.attacker}
                   </div>
                   <div className="small" style={{ color: "var(--text)" }}>
-                    <span className="mono tiny faint">agent ▸ </span>
+                    <span className="mono tiny faint">agent ◂ </span>
                     {t.agent}
                   </div>
                   {t.toolCalls.length > 0 && (

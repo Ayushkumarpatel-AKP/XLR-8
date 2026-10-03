@@ -116,6 +116,7 @@ function InteractiveBody({
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [allPrompts, setAllPrompts] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
 
   // A different agent means a different conversation.
@@ -159,7 +160,9 @@ function InteractiveBody({
 
   return (
     <>
-      <div className="target-chat" ref={scroller} style={{ height }}>
+      {/* max-height, not height: a short conversation should not leave a well
+          of empty space, but a long one still scrolls and stays bounded. */}
+      <div className="target-chat" ref={scroller} style={{ maxHeight: height, minHeight: 140 }}>
         {messages.map((m, i) => (
           <div key={i} className={`target-row ${m.role}`}>
             {m.role === "agent" && <span className="target-avatar">{target.name.charAt(0).toUpperCase()}</span>}
@@ -209,11 +212,20 @@ function InteractiveBody({
       {target.examplePrompts.length > 0 && (
         <div className="target-quick">
           <span className="faint tiny">try:</span>
-          {target.examplePrompts.map((p) => (
+          {(allPrompts ? target.examplePrompts : target.examplePrompts.slice(0, 4)).map((p) => (
             <button key={p} type="button" disabled={busy} onClick={() => void send(p)} title={p}>
-              {p.length > 38 ? p.slice(0, 37) + "…" : p}
+              {p.length > 34 ? p.slice(0, 33) + "…" : p}
             </button>
           ))}
+          {target.examplePrompts.length > 4 && (
+            <button
+              type="button"
+              className="target-quick-more"
+              onClick={() => setAllPrompts((v) => !v)}
+            >
+              {allPrompts ? "show fewer" : `+${target.examplePrompts.length - 4} more`}
+            </button>
+          )}
         </div>
       )}
     </>
