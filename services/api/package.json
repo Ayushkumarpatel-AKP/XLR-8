@@ -6,7 +6,8 @@
   "main": "./src/context.ts",
   "exports": {
     ".": "./src/context.ts",
-    "./server": "./src/server.ts"
+    "./server": "./src/server.ts",
+    "./pr-gate": "./src/pr-gate.ts"
   },
   "scripts": {
     "dev": "tsx src/server.ts"

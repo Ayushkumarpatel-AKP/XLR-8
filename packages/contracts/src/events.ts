@@ -45,6 +45,7 @@ export const MissionEventType = {
   reportReady: "report.ready",
   userPrompt: "user.prompt",
   agentResponse: "agent.response",
+  blackboardPosted: "blackboard.posted",
   redteamTurn: "redteam.turn",
   canaryTriggered: "canary.triggered",
   judgeVerdicted: "judge.verdict",

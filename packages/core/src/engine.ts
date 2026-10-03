@@ -428,8 +428,8 @@ export class AgentGuardEngine {
       evidenceIds?: string[];
       weight?: number;
       halfLifeSec?: number;
-    }) =>
-      blackboard.post({
+    }) => {
+      const entry = blackboard.post({
         id: blackboardId(),
         missionId: mission.id,
         kind: input.kind,
@@ -440,6 +440,26 @@ export class AgentGuardEngine {
         evidenceIds: input.evidenceIds ?? [],
         createdAt: nowIso(),
       });
+      // Make the stigmergy observable: a later stage's decision depends on what
+      // is on this board, so the board itself has to be visible in the stream.
+      emit({
+        actorType: "system",
+        actorId: "blackboard",
+        type: MissionEventType.blackboardPosted,
+        status: "info",
+        severity: "info",
+        message: `${entry.kind} posted: ${entry.key}`,
+        payload: {
+          entryId: entry.id,
+          kind: entry.kind,
+          key: entry.key,
+          weight: entry.weight,
+          halfLifeSec: entry.halfLifeSec,
+        },
+        evidenceIds: entry.evidenceIds,
+      });
+      return entry;
+    };
 
     // ---- mutable run state threaded across stages -----------------------
     let blast: BlastRadius | null = null;

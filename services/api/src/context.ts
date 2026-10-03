@@ -10,13 +10,9 @@ import type {
 import { digestSnapshot, nowIso } from "@agentguard/contracts";
 import {
   attackLibraryVersionOf,
-  buildReceipt,
   createFileLedger,
   encodeReceipt,
-  fingerprintOf,
-  upperBound95,
-  type ReceiptControl,
-  type ReceiptDisclosure,
+  issueReceiptForMissions,
 } from "@agentguard/receipt";
 import { AUDIT_SCENARIO, AgentGuardEngine, classifyTools } from "@agentguard/core";
 import {
@@ -524,84 +520,13 @@ export function createApiContext(): ApiContext {
       missions.push(latest);
     }
 
-    const tests = missions.flatMap((m) => m.tests);
-    const trials = tests.length;
-    if (trials < 1) {
+    let receipt;
+    try {
+      receipt = issueReceiptForMissions({ missions, manifest, scenarios: trapLibrary, ledger });
+    } catch (err) {
       // A bound is never fabricated from zero observations.
-      return reply.code(409).send({ error: "No executed test was found; a receipt cannot be issued without evidence." });
+      return reply.code(409).send({ error: (err as Error).message });
     }
-
-    const violations = tests.filter((t) => t.status === "FAIL").length;
-    const label = tests[0]!.title;
-    const control: ReceiptControl = {
-      id: scenario.id,
-      label,
-      trials,
-      violations,
-      upperBound95: upperBound95(violations, trials),
-      boundScope: `${trials} run(s) of "${label}" only — no other trap was exercised`,
-      attackLibraryVersion,
-      notCovered: [],
-    };
-
-    // The strictest judge verdict across the runs is the one that gets sealed.
-    const verdicts = tests.map((t) => t.judge).filter((j): j is NonNullable<typeof j> => Boolean(j));
-    const verdict =
-      verdicts.sort((a, b) => a.starRating - b.starRating)[0] ??
-      {
-        starRating: violations > 0 ? 1 : 5,
-        headline: violations > 0 ? `${violations}/${trials} run(s) failed` : `No failure in ${trials} run(s)`,
-        explanation: "No model judge was available on this run; the score reflects deterministic outcomes only.",
-        dimensions: [],
-        citedEvidenceId: null,
-        providerId: "none",
-        providerKind: "deterministic",
-        reconciled: true,
-        capApplied: null,
-      };
-
-    // Dedupe disclosures by canary so a repeated hit is reported once.
-    const seen = new Set<string>();
-    const disclosures: ReceiptDisclosure[] = [];
-    for (const hit of tests.flatMap((t) => t.canaryHits ?? [])) {
-      if (seen.has(hit.canaryId)) continue;
-      seen.add(hit.canaryId);
-      disclosures.push({
-        canaryId: hit.canaryId,
-        label: hit.label,
-        severity: hit.severity,
-        dimension: hit.dimension,
-        quote: hit.matchedText,
-        where: hit.where,
-      });
-    }
-
-    const coveredDimensions = [...new Set(verdicts.flatMap((v) => v.dimensions.map((d) => d.name)))];
-    const identity = manifest.id;
-    const manifestDigest = digestSnapshot(manifest);
-    const trapIds = [...new Set(tests.map((t) => t.scenarioId))];
-    const fingerprint = fingerprintOf({ agentId: manifest.id, manifestDigest, trapIds, attackLibraryVersion });
-
-    const previous = ledger.latest(identity);
-    const previousFingerprint = previous && previous.fingerprint !== fingerprint ? previous.fingerprint : null;
-
-    const receipt = buildReceipt({
-      identity,
-      agentId: manifest.id,
-      agentName: manifest.name,
-      manifestDigest,
-      trapIds,
-      attackLibraryVersion,
-      verdict,
-      controls: [control],
-      disclosures,
-      allDimensions: ALL_DIMENSIONS,
-      coveredDimensions,
-      previousFingerprint,
-    });
-
-    // Advance the pointer AFTER building, so the new receipt records what it supersedes.
-    ledger.advance({ identity, fingerprint, issuedAt: receipt.issuedAt });
 
     return reply.code(201).send({ receipt, encoded: encodeReceipt(receipt) });
   });

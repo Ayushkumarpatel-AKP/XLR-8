@@ -130,6 +130,40 @@ describe("PR gate rendering", () => {
     expect(comment).not.toMatch(/\bsecure\b/i);
   });
 
+  it("does not label unexecuted traps as passing", () => {
+    const gate = evaluateGate({
+      base: manifest(),
+      head: manifest(),
+      affectedTraps: ["sensitive-data", "data-extraction"],
+      results: [],
+    });
+    const comment = formatPrComment("Acme Assistant", gate);
+
+    expect(gate.executed).toBe(0);
+    expect(comment).toContain("| sensitive-data | not run |");
+    expect(comment).toContain("| data-extraction | not run |");
+    expect(comment).toContain("NOT RUN");
+    // The whole point: a dry run must never read as a pass.
+    expect(comment).not.toMatch(/\| sensitive-data \| success \|/);
+    expect(comment).not.toMatch(/gate: PASS/);
+  });
+
+  it("reports each trap's own status, not the overall verdict", () => {
+    const gate = evaluateGate({
+      base: manifest(),
+      head: manifest(),
+      affectedTraps: ["a", "b"],
+      results: [
+        { trapId: "a", status: "PASS" },
+        { trapId: "b", status: "FAIL" },
+      ],
+    });
+    const comment = formatPrComment("Acme Assistant", gate);
+    expect(comment).toContain("| a | PASS |");
+    expect(comment).toContain("| b | FAIL |");
+    expect(gate.executed).toBe(2);
+  });
+
   it("builds a check-run payload named 'AgentGuard X PR Gate'", () => {
     const gate = evaluateGate({
       base: manifest(),

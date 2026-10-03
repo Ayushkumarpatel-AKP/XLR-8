@@ -1,16 +1,38 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { Command } from "commander";
 import type { AgentManifest, Mission } from "@agentguard/contracts";
 import { nowIso } from "@agentguard/contracts";
 import { AgentGuardEngine, AUDIT_SCENARIO, classifyTools } from "@agentguard/core";
 import { SCENARIO_IDS, SCENARIOS, createDemoLab, listScenarios, type DemoLab, type ScenarioKey } from "@agentguard/demo-lab";
 import { ingestedToManifest, ingestFromGitHub, serveMcpStdio, type McpToolHandler } from "@agentguard/mcp";
+import {
+  createFileLedger,
+  decodeReceipt,
+  encodeReceipt,
+  issueReceiptForMissions,
+  verifyReceiptNode,
+  verifyReceiptSignature,
+} from "@agentguard/receipt";
+import { SARIF_SCHEMA, SARIF_VERSION, toSarif } from "@agentguard/sarif";
 import { ansi, box, pad } from "./theme.js";
 import { renderMission } from "./warroom.js";
 import { runTui, tuiSupported } from "./tui.js";
-import { bar, barChart, chips, compareRow, comparison, heading, justify, riskGauge, stackedBar, table } from "./chart.js";
+import { bar, barChart, chips, compareRow, comparison, heading, justify, riskGauge, stackedBar, stars, table } from "./chart.js";
 import { demoSummary, missionOutcome, type DemoRow } from "./format.js";
 import { graphLegend, renderGraphLines } from "./graph-render.js";
+import {
+  renderDisclosures,
+  renderJudge,
+  renderLedger,
+  renderPrGate,
+  renderReceipt,
+  renderRedTeam,
+  renderSarif,
+  renderSwarm,
+  renderTrap,
+  renderTrapLibrary,
+} from "./verify-view.js";
 
 const SEV_COLOR: Record<string, (s: string) => string> = {
   critical: ansi.red,
@@ -503,22 +525,28 @@ mission
 const test = program.command("test").description("stress-test scenarios");
 test
   .command("list")
-  .description("list available scenarios")
+  .description("list available scenarios (same as `trap list`)")
   .action(() => {
     const scenarios = listScenarios();
     emit(
       scenarios,
-      scenarios.map((s) => `${ansi.cyan(pad(s.id, 18))} ${pad(s.title, 26)} ${ansi.gray(s.description)}`).join("\n"),
+      [
+        ...renderTrapLibrary(scenarios),
+        "",
+        ansi.gray("  detail on one trap, including its planted secrets:  agentguard trap show <id>"),
+      ].join("\n"),
     );
   });
 
 test
   .command("run [suite]")
-  .description("run a scenario suite")
-  .action(async (suite?: ScenarioKey) => {
+  .description("run one trap and print the attacker transcript, the disclosures and the scorecard")
+  .option("--profile <profile>", "which brief the agent under test runs: hardened | weak", "hardened")
+  .action(async (suite: ScenarioKey | undefined, opts: { profile?: string }) => {
     const app = createCliApp();
     const id = suite && SCENARIO_IDS.includes(suite) ? suite : "approval-bypass";
-    const m = await app.lab.runScenario(id);
+    const profile = opts.profile === "weak" ? "weak" : "hardened";
+    const m = await app.lab.runScenario(id, profile);
     const result = m.tests[0] ?? null;
     if (!result) {
       emit({ missionId: m.id, result: null }, ansi.gray("no result"));
@@ -528,6 +556,7 @@ test
     const uniqueTools = [...new Set(result.toolRequests)];
     const lines = [
       heading(`test — ${result.title}`),
+      `  ${ansi.gray(`agent brief: ${profile}${profile === "weak" ? " (the contrast preset)" : ""}`)}`,
       "",
       `  ${result.status === "PASS" ? ansi.green("PASS") : ansi.red(result.status)}   ${sevTag(result.severity)}   ${ansi.gray(`${result.durationMs}ms`)}   ${ansi.gray(result.model)}`,
       "",
@@ -541,7 +570,13 @@ test
             })),
             { width: 14 },
           )
-        : [ansi.gray("  (none — static audit)")]),
+        : [
+            ansi.gray(
+              m.scenarioId === "audit"
+                ? "  (none — a static audit executes nothing)"
+                : "  (none — the agent answered without calling a tool)",
+            ),
+          ]),
       "",
       heading("evidence attached"),
       ...barChart(
@@ -552,8 +587,16 @@ test
         { width: 18 },
       ),
       "",
+      ...renderRedTeam(result),
+      "",
+      ...renderDisclosures(result),
+      "",
+      ...renderJudge(result),
+      "",
       heading("risk"),
       `  ${riskGauge(m.risk?.score ?? 0)}`,
+      "",
+      ansi.gray(`  seal this evidence:  agentguard receipt issue ${m.agentId}`),
     ];
     emit({ missionId: m.id, result }, lines.join("\n"));
   });
@@ -892,6 +935,269 @@ demo
     emit({ ran: missions.length, missions }, lines.join("\n"));
   });
 
+// ---- trap library ---------------------------------------------------------
+const trap = program.command("trap").description("the trap library — what an agent gets tested with");
+trap
+  .command("list")
+  .description("list every trap, grouped by how the agent is exercised")
+  .action(() => {
+    const scenarios = listScenarios();
+    emit(scenarios, renderTrapLibrary(scenarios).join("\n"));
+  });
+
+trap
+  .command("show <id>")
+  .description("show one trap, including the exact secrets planted in its agent")
+  .action((id: string) => {
+    const scenario = listScenarios().find((s) => s.id === id);
+    if (!scenario) {
+      process.stderr.write(`Unknown trap: ${id}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    emit(scenario, renderTrap(scenario).join("\n"));
+  });
+
+// ---- swarm / blackboard ---------------------------------------------------
+program
+  .command("swarm [missionId]")
+  .description("show a mission's stage decisions and blackboard entries")
+  .action((missionId?: string) => {
+    const app = createCliApp();
+    const m = missionId ? app.engine.getMission(missionId) : app.engine.listMissions()[0];
+    if (!m) {
+      process.stderr.write("No mission yet. Run: agentguard demo run\n");
+      process.exitCode = 1;
+      return;
+    }
+    emit(m.swarm, renderSwarm(m).join("\n"));
+  });
+
+// ---- signed receipts ------------------------------------------------------
+const cliLedger = (app: CliApp) => createFileLedger(join(app.dataDir, "ledger.jsonl"));
+
+const receiptCmd = program.command("receipt").description("issue and verify signed receipts");
+
+receiptCmd
+  .command("issue [agentId]")
+  .description("seal the evidence already collected as a signed receipt")
+  .option("--scenario <id>", "run this trap to produce fresh evidence")
+  .option("--repeat <n>", "run the trap N times so the confidence bound means something", "1")
+  .action(async (agentId: string | undefined, opts: { scenario?: ScenarioKey; repeat: string }) => {
+    const app = createCliApp();
+    const manifest = resolveAgent(app, agentId);
+    if (!manifest) return noAgent();
+
+    const repeat = Math.max(1, Math.min(20, Number(opts.repeat) || 1));
+    const missions: Mission[] = [];
+
+    if (opts.scenario || repeat > 1) {
+      const scenarioId = opts.scenario ?? "data-extraction";
+      if (!SCENARIO_IDS.includes(scenarioId)) {
+        process.stderr.write(`Unknown scenario: ${scenarioId}\n`);
+        process.exitCode = 1;
+        return;
+      }
+      for (let i = 0; i < repeat; i++) missions.push(await app.lab.runScenario(scenarioId));
+    } else {
+      const latest = app.engine.listMissions().find((m) => m.agentId === manifest.id && m.tests.length > 0);
+      if (!latest) {
+        process.stderr.write(
+          `No executed test exists for "${manifest.name}", so there is no evidence to seal.\n` +
+            `Run a trap first, e.g.  agentguard receipt issue ${manifest.id} --scenario data-extraction\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+      missions.push(latest);
+    }
+
+    let sealed: ReturnType<typeof issueReceiptForMissions>;
+    try {
+      sealed = issueReceiptForMissions({ missions, manifest, scenarios: listScenarios(), ledger: cliLedger(app) });
+    } catch (err) {
+      process.stderr.write(`${(err as Error).message}\n`);
+      process.exitCode = 1;
+      return;
+    }
+
+    const encoded = encodeReceipt(sealed);
+    const lines = [
+      ...renderReceipt(sealed),
+      "",
+      heading("verify it"),
+      `  ${ansi.gray("this link verifies in any browser, against the key the receipt carries:")}`,
+      `  ${ansi.cyan(`/verify/${sealed.fingerprint}?receipt=${encoded}`)}`,
+      "",
+      ansi.gray("  the web app serves that path; the signature is checked by the visitor, not by us."),
+    ];
+    emit({ receipt: sealed, encoded }, lines.join("\n"));
+  });
+
+async function showReceipt(payload: string): Promise<void> {
+  const raw = existsSync(payload) ? readFileSync(payload, "utf8").trim() : payload;
+  let decoded: ReturnType<typeof decodeReceipt>;
+  try {
+    decoded = decodeReceipt(raw);
+  } catch {
+    try {
+      decoded = JSON.parse(raw) as ReturnType<typeof decodeReceipt>;
+    } catch {
+      process.stderr.write(
+        "Could not read a receipt from that value. Pass the compact payload, a JSON file, or a receipt exported by `receipt issue`.\n",
+      );
+      process.exitCode = 1;
+      return;
+    }
+  }
+
+  const nodeOk = verifyReceiptNode(decoded);
+  const isomorphicOk = await verifyReceiptSignature(decoded);
+  const tampered = { ...decoded, verdict: { ...decoded.verdict, starRating: decoded.verdict.starRating === 5 ? 0 : 5 } };
+  const tamperRejected = !(await verifyReceiptSignature(tampered));
+
+  const lines = [
+    ...renderReceipt(decoded),
+    "",
+    heading("verification"),
+    `  ${nodeOk ? ansi.green("✓") : ansi.red("✗")} signature verifies (node:crypto)`,
+    `  ${isomorphicOk ? ansi.green("✓") : ansi.red("✗")} signature verifies (the browser WebCrypto path)`,
+    `  ${tamperRejected ? ansi.green("✓") : ansi.red("✗")} a tampered score is rejected`,
+    "",
+    ansi.gray("  a failed signature means the bytes changed after signing — the verdict is not trustworthy."),
+  ];
+  emit({ receipt: decoded, verified: { node: nodeOk, isomorphic: isomorphicOk, tamperRejected } }, lines.join("\n"));
+
+  if (!nodeOk || !isomorphicOk) process.exitCode = 1;
+}
+
+receiptCmd
+  .command("show <payload>")
+  .description("decode and verify a receipt (compact payload, JSON, or a file)")
+  .action(showReceipt);
+receiptCmd.command("verify <payload>").description("alias for `receipt show`").action(showReceipt);
+
+// ---- freshness ledger -----------------------------------------------------
+program
+  .command("ledger [identity]")
+  .description("show the freshness ledger for an agent (CURRENT vs SUPERSEDED)")
+  .action((identity?: string) => {
+    const app = createCliApp();
+    const manifest = resolveAgent(app, identity);
+    const id = identity ?? manifest?.id ?? app.engine.getActiveAgentId();
+    if (!id) return noAgent();
+    const l = cliLedger(app);
+    const history = l.history(id);
+    emit({ identity: id, current: l.latest(id), history }, renderLedger(id, history, l.latest(id)).join("\n"));
+  });
+
+// ---- SARIF ----------------------------------------------------------------
+program
+  .command("sarif [missionId]")
+  .description("export findings as SARIF 2.1.0 for GitHub code scanning")
+  .option("--out <file>", "write the SARIF document to a file")
+  .action((missionId: string | undefined, opts: { out?: string }) => {
+    const app = createCliApp();
+    const m = missionId ? app.engine.getMission(missionId) : app.engine.listMissions()[0];
+    if (!m) {
+      process.stderr.write("No mission yet. Run: agentguard demo run\n");
+      process.exitCode = 1;
+      return;
+    }
+    const manifest = app.engine.getAgent(m.agentId);
+    const log = toSarif({
+      findings: m.findings,
+      agentId: m.agentId,
+      agentName: m.agentName,
+      sourceRef: manifest?.sourceRef ?? "",
+      missionId: m.id,
+    });
+
+    if (opts.out) {
+      writeFileSync(opts.out, JSON.stringify(log, null, 2) + "\n", "utf8");
+      emit({ out: opts.out, results: log.runs[0]?.results.length ?? 0 }, `${ansi.green("✓")} wrote ${opts.out}`);
+      return;
+    }
+
+    const run = log.runs[0];
+    emit(
+      log,
+      renderSarif({
+        version: log.version,
+        schema: SARIF_SCHEMA,
+        driver: run?.tool.driver.name ?? "AgentGuard X",
+        driverVersion: run?.tool.driver.version ?? "",
+        rules: run?.tool.driver.rules?.length ?? 0,
+        results: (run?.results ?? []).map((r) => ({ ruleId: r.ruleId ?? "", level: r.level ?? "note" })),
+      }).join("\n"),
+    );
+  });
+
+// ---- PR gate --------------------------------------------------------------
+program
+  .command("pr-check [agentId]")
+  .description("evaluate the merge gate: which traps this change affects, and would they pass")
+  .option("--base <agentId>", "compare against this agent to find newly added capabilities")
+  .option("--traps <ids>", "comma-separated trap ids to run instead of deriving them")
+  .option("--run", "actually execute the affected traps (needs a live runtime)")
+  .option("--profile <profile>", "hardened | weak", "hardened")
+  .action(async (agentId: string | undefined, opts: { base?: string; traps?: string; run?: boolean; profile?: string }) => {
+    const app = createCliApp();
+    const manifest = resolveAgent(app, agentId);
+    if (!manifest) return noAgent();
+
+    const gate = await import("@agentguard/api/pr-gate");
+    const base = opts.base ? app.engine.getAgent(opts.base) : undefined;
+    const newCapabilities = base ? gate.newCapabilitiesBetween(base, manifest) : [];
+
+    const library = listScenarios();
+    const affectedTraps = opts.traps
+      ? opts.traps
+          .split(",")
+          .map((s) => s.trim())
+          .filter((s) => SCENARIO_IDS.includes(s as ScenarioKey))
+      : newCapabilities.length === 0
+        ? library.map((s) => s.id)
+        : library.filter((s) => s.expectedTools.some((t) => newCapabilities.includes(t))).map((s) => s.id);
+
+    const results: Array<{ trapId: string; status: "PASS" | "WARN" | "FAIL" | "BLOCKED" | "ERROR" }> = [];
+    let executed = false;
+    if (opts.run) {
+      if (!app.engine.hasRuntime(manifest.id)) {
+        process.stderr.write(`"${manifest.name}" has no runtime, so the gate cannot execute traps.\n`);
+        process.exitCode = 1;
+        return;
+      }
+      for (const id of affectedTraps) {
+        const m = await app.lab.runScenario(id as ScenarioKey, opts.profile === "weak" ? "weak" : "hardened");
+        results.push({ trapId: id, status: m.tests[0]?.status ?? "ERROR" });
+      }
+      executed = true;
+    }
+
+    const outcome = gate.evaluateGate({ base: base ?? manifest, head: manifest, affectedTraps, results });
+    const comment = gate.formatPrComment(manifest.name, outcome);
+    const checkRun = gate.buildCheckRunPayload(outcome);
+
+    emit(
+      { gate: outcome, checkRun, comment, executed },
+      renderPrGate({
+        agentName: manifest.name,
+        conclusion: outcome.conclusion,
+        counts: outcome.counts,
+        affectedTraps: outcome.affectedTraps,
+        newCapabilities,
+        comment,
+        checkRunName: checkRun.name,
+        executed,
+        note: executed
+          ? `${results.length} trap(s) executed in the local sandbox`
+          : "dry run — no trap was executed (pass --run)",
+        results,
+      }).join("\n"),
+    );
+  });
+
 // ---- web / mcp ------------------------------------------------------------
 program
   .command("web")
@@ -971,14 +1277,28 @@ if (
       ansi.bold("INTERACTIVE"),
       "  agentguard                       open the full-screen War Room UI",
       "",
-      ansi.bold("USAGE"),
+      ansi.bold("DISCOVER"),
+      "  agentguard agent list | agent inspect <id> | agent import <repo>",
+      "  agentguard inventory | graph [agentId] | blast-radius [agentId]",
+      "",
+      ansi.bold("TEST"),
+      "  agentguard trap list | trap show <id>",
+      "  agentguard test run <scenario>          red-team transcript, disclosures, judge scorecard",
       "  agentguard demo run [--scenario <id>] [--follow]",
-      "  agentguard doctor",
-      "  agentguard agent list | agent inspect <id>",
-      "  agentguard mission start <agent> --scenario <id>",
-      "  agentguard findings | drift check | graph | blast-radius",
-      "  agentguard report <missionId>",
-      "  agentguard web   ·   agentguard mcp serve",
+      "  agentguard swarm [missionId]            stage decisions + blackboard entries",
+      "",
+      ansi.bold("PROVE"),
+      "  agentguard receipt issue [agentId] [--scenario <id>] [--repeat <n>]",
+      "  agentguard receipt verify <payload|file>",
+      "  agentguard ledger [agentId]             CURRENT vs SUPERSEDED",
+      "",
+      ansi.bold("SHIP"),
+      "  agentguard drift check | findings | report <missionId>",
+      "  agentguard sarif [missionId] [--out file]",
+      "  agentguard pr-check [agentId] [--run] [--base <agentId>] [--traps a,b]",
+      "",
+      ansi.bold("SERVE"),
+      "  agentguard web   ·   agentguard mcp serve   ·   agentguard doctor",
       "",
       ansi.gray("Global flags: --json --quiet --provider --config --output --local"),
       ansi.gray("DEMO / SANDBOX / NO REAL DATA"),

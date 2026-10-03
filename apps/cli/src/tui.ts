@@ -77,7 +77,7 @@ export class Tui {
   constructor(ctx: TuiContext) {
     this.ctx = ctx;
     this.menuAll = buildCommands();
-    this.chat = new ChatSession(ctx.engine, ctx.lab, ctx.engine.router);
+    this.chat = new ChatSession(ctx.engine, ctx.lab, ctx.engine.router, ctx.dataDir);
   }
 
   // ---- public API used by command handlers --------------------------------

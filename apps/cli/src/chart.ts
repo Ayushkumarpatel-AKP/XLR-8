@@ -128,6 +128,38 @@ export function heading(text: string): string {
   return ansi.bold(ansi.cream(text.toUpperCase()));
 }
 
+/** A 5-star scorecard row, e.g. `★★☆☆☆ 2/5`. */
+export function stars(rating: number, max = 5): string {
+  const clamped = Math.max(0, Math.min(max, rating));
+  const full = Math.floor(clamped);
+  const half = clamped - full >= 0.5;
+  let out = "";
+  for (let i = 0; i < max; i++) {
+    if (i < full) out += ansi.yellow("★");
+    else if (i === full && half) out += ansi.gray("★");
+    else out += ansi.olive("☆");
+  }
+  const tone = clamped <= 2 ? ansi.red : clamped >= 4.5 ? ansi.green : ansi.yellow;
+  return `${out} ${tone(ansi.bold(`${clamped}/${max}`))}`;
+}
+
+/**
+ * A confidence bound shown the way it must be shown: with its scope and its
+ * trial count, never as a bare percentage.
+ */
+export function bound(value: number, trials: number, scope: string): string {
+  const pct = value * 100;
+  const color = pct >= 80 ? ansi.red : pct >= 40 ? ansi.yellow : ansi.green;
+  return `${bar(pct, 100, 16, color)} ${color(ansi.bold(`${pct.toFixed(1)}%`))} ${ansi.gray(
+    `upper 95% · ${trials} trial${trials === 1 ? "" : "s"}`,
+  )}\n    ${ansi.gray(scope)}`;
+}
+
+/** One-line severity pill used by the findings and disclosure rows. */
+export function pill(text: string, color: Color): string {
+  return color(`[${text}]`);
+}
+
 /** before — after comparison block used by drift / compare. */
 export function comparison(
   left: { title: string; lines: string[] },

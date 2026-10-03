@@ -16,6 +16,8 @@
     "@agentguard/drift": "workspace:*",
     "@agentguard/mcp": "workspace:*",
     "@agentguard/model-router": "workspace:*",
+    "@agentguard/receipt": "workspace:*",
+    "@agentguard/sarif": "workspace:*",
     "@agentguard/api": "workspace:*",
     "commander": "^12.1.0"
   }

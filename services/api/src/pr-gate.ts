@@ -27,6 +27,10 @@ export interface GateResult {
   conclusion: "success" | "failure";
   affectedTraps: string[];
   counts: { pass: number; warn: number; fail: number };
+  /** What was actually executed, per trap. Empty means nothing ran. */
+  results: TrapResult[];
+  /** How many traps produced a result. Zero means no claim is being made. */
+  executed: number;
   newCapabilities: string[];
   summary: string;
 }
@@ -75,13 +79,26 @@ export function evaluateGate(input: EvaluateGateInput): GateResult {
   const blocking = input.results.filter((r) => r.status === "FAIL" || r.status === "ERROR").length;
   const conclusion: GateResult["conclusion"] = blocking > 0 ? "failure" : "success";
   const newCapabilities = newCapabilitiesBetween(input.base, input.head);
+  const executed = input.results.length;
 
+  // With nothing executed there is no evidence, so the summary must not read as
+  // a pass. A check-run still needs a conclusion; the text carries the caveat.
   const summary =
-    conclusion === "failure"
-      ? `AgentGuard X PR gate: FAIL — ${counts.fail} failed, ${blocking - counts.fail} errored, ${counts.warn} warned, ${counts.pass} passed across ${input.affectedTraps.length} affected trap(s); ${newCapabilities.length} new capability(ies).`
-      : `AgentGuard X PR gate: PASS — ${counts.pass} passed, ${counts.warn} warned across ${input.affectedTraps.length} affected trap(s); ${newCapabilities.length} new capability(ies).`;
+    executed === 0
+      ? `AgentGuard X PR gate: NOT RUN — no trap was executed, so no claim is made about ${input.affectedTraps.length} affected trap(s); ${newCapabilities.length} new capability(ies).`
+      : conclusion === "failure"
+        ? `AgentGuard X PR gate: FAIL — ${counts.fail} failed, ${blocking - counts.fail} errored, ${counts.warn} warned, ${counts.pass} passed across ${executed} of ${input.affectedTraps.length} affected trap(s); ${newCapabilities.length} new capability(ies).`
+        : `AgentGuard X PR gate: PASS — ${counts.pass} passed, ${counts.warn} warned across ${executed} of ${input.affectedTraps.length} affected trap(s); ${newCapabilities.length} new capability(ies).`;
 
-  return { conclusion, affectedTraps: [...input.affectedTraps], counts, newCapabilities, summary };
+  return {
+    conclusion,
+    affectedTraps: [...input.affectedTraps],
+    counts,
+    results: [...input.results],
+    executed,
+    newCapabilities,
+    summary,
+  };
 }
 
 /**
@@ -90,19 +107,27 @@ export function evaluateGate(input: EvaluateGateInput): GateResult {
  * certification.
  */
 export function formatPrComment(agentName: string, gate: GateResult): string {
-  const status = gate.conclusion === "success" ? "success" : "failure";
   const lines: string[] = [
     PR_GATE_MARKER,
     `## AgentGuard X PR Gate — ${agentName}`,
     "",
+    gate.executed === 0
+      ? "_No trap was executed, so no status is claimed for the traps below._"
+      : `_${gate.executed} of ${gate.affectedTraps.length} affected trap(s) were executed._`,
+    "",
   ];
 
   if (gate.affectedTraps.length === 0) {
-    lines.push("_No affected traps were run._");
+    lines.push("_No affected traps were found for this change._");
   } else {
+    // Each trap reports its OWN result. A trap that never ran says so rather
+    // than inheriting the overall verdict — a dry run is not a pass.
+    const byTrap = new Map(gate.results.map((r) => [r.trapId, r.status]));
     lines.push("| Affected trap | Status |");
     lines.push("| --- | --- |");
-    for (const trap of gate.affectedTraps) lines.push(`| ${trap} | ${status} |`);
+    for (const trap of gate.affectedTraps) {
+      lines.push(`| ${trap} | ${byTrap.get(trap) ?? "not run"} |`);
+    }
   }
 
   lines.push("");

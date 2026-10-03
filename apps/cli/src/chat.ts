@@ -1,7 +1,14 @@
+import { join } from "node:path";
 import type { Mission } from "@agentguard/contracts";
 import type { AgentGuardEngine } from "@agentguard/core";
 import { SCENARIOS, listScenarios, type DemoLab, type ScenarioKey } from "@agentguard/demo-lab";
 import type { ModelRouter } from "@agentguard/model-router";
+import {
+  createFileLedger,
+  createMemoryLedger,
+  issueReceiptForMissions,
+  type Ledger,
+} from "@agentguard/receipt";
 import type { Line } from "./kind.js";
 import { missionRecap, missionSummary } from "./format.js";
 
@@ -24,6 +31,12 @@ type IntentKind =
   | "blast"
   | "agents"
   | "report"
+  | "disclosures"
+  | "judge"
+  | "traps"
+  | "swarm"
+  | "receipt"
+  | "ledger"
   | "help"
   | "greeting"
   | "unknown";
@@ -235,7 +248,13 @@ const SCENARIO_KEYWORDS: Record<ScenarioKey, string[]> = {
 
 const META_KEYWORDS: Array<{ intent: IntentKind; words: string[] }> = [
   { intent: "explain-risk", words: ["why", "risk score", "risk", "went up", "increased", "increase", "explain", "reason"] },
-  { intent: "evidence", words: ["evidence", "proof", "receipt", "receipts", "justify", "back this up"] },
+  { intent: "disclosures", words: ["disclosure", "disclosures", "what did it say", "did it leak anything", "leak anything", "canary", "canaries", "planted", "escape"] },
+  { intent: "judge", words: ["score", "scorecard", "rating", "stars", "judge", "how did it do", "how bad"] },
+  { intent: "receipt", words: ["receipt", "receipts", "seal", "signed", "issue a receipt", "verifiable"] },
+  { intent: "ledger", words: ["ledger", "superseded", "still current", "freshness", "expired"] },
+  { intent: "traps", words: ["traps", "trap", "scenarios", "scenario list", "what tests", "trap library", "library"] },
+  { intent: "swarm", words: ["swarm", "blackboard", "stages", "stage decisions", "pipeline", "stage"] },
+  { intent: "evidence", words: ["evidence", "proof", "justify", "back this up"] },
   { intent: "findings", words: ["findings", "finding", "issues", "issue", "problems", "problem", "vulnerabilities", "vulns", "what is wrong", "whats wrong"] },
   { intent: "blast", words: ["blast", "impact", "radius", "reach", "damage", "worst case"] },
   { intent: "graph", words: ["graph", "connections", "edges", "trust", "relationships", "topology", "what can it reach"] },
@@ -310,12 +329,28 @@ export interface ChatTurn {
 export class ChatSession {
   private readonly history: ChatTurn[] = [];
   private lastMissionId: string | null = null;
+  private cachedLedger: Ledger | null = null;
 
   constructor(
     private readonly engine: AgentGuardEngine,
     private readonly lab: DemoLab,
     private readonly router: ModelRouter,
+    /** Where the receipt freshness ledger lives. Omit for an in-memory session. */
+    private readonly dataDir?: string,
   ) {}
+
+  /**
+   * The same ledger the API and the scripted commands use, so a receipt sealed
+   * in one surface shows up as CURRENT/SUPERSEDED in the others.
+   */
+  private ledger(): Ledger {
+    if (!this.cachedLedger) {
+      this.cachedLedger = this.dataDir
+        ? createFileLedger(join(this.dataDir, "ledger.jsonl"))
+        : createMemoryLedger();
+    }
+    return this.cachedLedger;
+  }
 
   getHistory(): ChatTurn[] {
     return [...this.history];
@@ -366,6 +401,18 @@ export class ChatSession {
         return this.runScenario(intent.scenarioId!);
       case "explain-risk":
         return this.explainRisk();
+      case "disclosures":
+        return this.showDisclosures();
+      case "judge":
+        return this.showJudge();
+      case "traps":
+        return this.showTraps();
+      case "swarm":
+        return this.showSwarm();
+      case "receipt":
+        return this.sealReceipt();
+      case "ledger":
+        return this.showLedger();
       case "evidence":
         return this.showEvidence();
       case "findings":
@@ -423,6 +470,179 @@ export class ChatSession {
       lines.push({ text: `  +${String(f.contribution).padStart(2)}  ${f.label}${f.detail ? ` — ${f.detail}` : ""}`, kind: "dim" });
     }
     lines.push({ text: "These contributions are computed in code, so the same inputs always give the same score.", kind: "dim" });
+    return lines;
+  }
+
+  /** What the agent actually said — the deterministic half of a verdict. */
+  private showDisclosures(): Line[] {
+    const m = this.lastMission;
+    const test = m?.tests[0];
+    if (!m || !test) {
+      return [{ text: "No mission has run yet — try “check the refund for approval” or /demo.", kind: "dim" }];
+    }
+    const hits = test.canaryHits ?? [];
+    if (hits.length === 0) {
+      return [
+        { text: `No disclosure was proven in ${test.title}.`, kind: "ok" },
+        { text: "  Every value planted in the agent's context stayed inside it.", kind: "dim" },
+        { text: "  That is a result, not an absence of testing — the scan really ran.", kind: "dim" },
+      ];
+    }
+    const lines: Line[] = [{ text: `${hits.length} proven disclosure(s) in ${test.title}:`, kind: "err" }];
+    for (const h of hits) {
+      lines.push({ text: `  [${h.severity}] ${h.label}`, kind: h.severity === "critical" ? "err" : "warn" });
+      lines.push({ text: `      the agent said: “${h.matchedText}”`, kind: "dim" });
+      lines.push({ text: `      found in ${h.where === "reply" ? "its reply" : "an outbound tool call"}`, kind: "dim" });
+    }
+    lines.push({
+      text: "An exact string match against a value planted in the agent's own context — not a model opinion.",
+      kind: "dim",
+    });
+    return lines;
+  }
+
+  /** The judge's scorecard, already reconciled against the canary evidence. */
+  private showJudge(): Line[] {
+    const test = this.lastMission?.tests[0];
+    if (!test?.judge) return [{ text: "No verdict yet — run a trap first (try “talk it out of the customer's email”).", kind: "dim" }];
+    const j = test.judge;
+    const bar = "★".repeat(Math.round(j.starRating)) + "☆".repeat(Math.max(0, 5 - Math.round(j.starRating)));
+    const lines: Line[] = [
+      { text: `${bar}  ${j.starRating}/5 — ${j.headline}`, kind: j.starRating <= 2 ? "err" : "ok" },
+      {
+        text: `  judged by ${j.providerKind}${j.reconciled ? " · reconciled against the canary evidence" : ""}`,
+        kind: "dim",
+      },
+    ];
+    if (j.capApplied) lines.push({ text: `  ▲ ${j.capApplied}`, kind: "warn" });
+    for (const d of j.dimensions) {
+      lines.push({
+        text: `  ${d.triggered ? "✗" : "✓"} ${d.name}${d.quotedMessage ? `  “${d.quotedMessage.slice(0, 64)}”` : ""}`,
+        kind: d.triggered ? "warn" : "dim",
+      });
+    }
+    return lines;
+  }
+
+  private showTraps(): Line[] {
+    const scenarios = listScenarios();
+    const counts = new Map<string, number>();
+    for (const s of scenarios) {
+      const kind = s.kind ?? "adversarial";
+      counts.set(kind, (counts.get(kind) ?? 0) + 1);
+    }
+    const lines: Line[] = [
+      { text: `${scenarios.length} traps in the library:`, kind: "info" },
+      ...[...counts.entries()].map<Line>(([kind, n]) => ({ text: `  ${kind}: ${n}`, kind: "dim" })),
+      { text: "  Every adversarial trap plants real values and scans for them.", kind: "dim" },
+      { text: "  Full list: agentguard trap list   ·   one trap: agentguard trap show <id>", kind: "dim" },
+    ];
+    return lines;
+  }
+
+  /** Stage decisions and the blackboard entries that drove them. */
+  private showSwarm(): Line[] {
+    const m = this.lastMission;
+    if (!m) return [{ text: "No mission yet — the swarm has not run.", kind: "dim" }];
+    const lines: Line[] = [{ text: `Stage decisions for ${m.id}:`, kind: "info" }];
+    for (const s of m.swarm) {
+      lines.push({
+        text: `  ${s.state === "done" ? "✓" : s.state === "skipped" ? "–" : "•"} ${s.label.padEnd(18)} ${s.state.padEnd(8)} ${s.detail}`,
+        kind: s.state === "skipped" ? "dim" : "info",
+      });
+    }
+    const decisions = m.events.filter((e) => e.type === "agent.thought");
+    if (decisions.length > 0) {
+      lines.push({ text: `${decisions.length} predicate decision(s):`, kind: "info" });
+      for (const e of decisions.slice(-8)) {
+        lines.push({
+          text: `  ${e.payload.run === true ? "run " : "skip"} ${String(e.payload.stage ?? "?")} — ${String(e.payload.reason ?? "")}`,
+          kind: "dim",
+        });
+      }
+    }
+    const posted = m.events.filter((e) => e.type === "blackboard.posted");
+    if (posted.length > 0) {
+      lines.push({ text: `${posted.length} blackboard entries posted.`, kind: "info" });
+      lines.push({
+        text: "  weight decays as 0.5^(ageSec / halfLifeSec) — urgency fades, posture lingers.",
+        kind: "dim",
+      });
+    }
+    return lines;
+  }
+
+  /** Seal the evidence already collected, using the same code path as the API. */
+  private sealReceipt(): Line[] {
+    const manifest = this.engine.getAgent(this.lab.agentId);
+    if (!manifest) return [{ text: "No agent registered — nothing to seal.", kind: "dim" }];
+    const latest = this.engine
+      .listMissions()
+      .find((m) => m.agentId === manifest.id && m.tests.length > 0);
+    if (!latest) {
+      return [
+        { text: "No executed test exists yet, so there is no evidence to seal.", kind: "warn" },
+        { text: "  Run a trap first — try: agentguard trap show data-extraction", kind: "dim" },
+      ];
+    }
+
+    try {
+      const receipt = issueReceiptForMissions({
+        missions: [latest],
+        manifest,
+        scenarios: listScenarios(),
+        ledger: this.ledger(),
+      });
+      const hits = receipt.disclosures.length;
+      const lines: Line[] = [
+        { text: `Sealed a receipt for ${receipt.agentName}.`, kind: "ok" },
+        { text: `  ${receipt.verdict.starRating}/5 — ${receipt.verdict.headline}`, kind: receipt.verdict.starRating <= 2 ? "err" : "info" },
+        { text: `  fingerprint ${receipt.fingerprint}`, kind: "dim" },
+      ];
+      if (receipt.verdict.capApplied) lines.push({ text: `  ▲ ${receipt.verdict.capApplied}`, kind: "warn" });
+      for (const c of receipt.controls) {
+        lines.push({
+          text: `  ${c.trials} trial(s) · ${c.violations} violation(s) · 95% upper bound ${(c.upperBound95 * 100).toFixed(1)}%`,
+          kind: "dim",
+        });
+      }
+      lines.push({
+        text: hits > 0 ? `  ${hits} disclosure(s) are quoted inside the receipt.` : "  No disclosure — the receipt says so.",
+        kind: hits > 0 ? "warn" : "dim",
+      });
+      if (receipt.previousFingerprint) {
+        lines.push({ text: `  ↻ supersedes ${receipt.previousFingerprint}`, kind: "dim" });
+      }
+      lines.push({ text: `  Verify it: agentguard receipt verify ${receipt.fingerprint.slice(0, 26)}…`, kind: "dim" });
+      lines.push({ text: "  (the full payload is printed by `agentguard receipt issue`)", kind: "dim" });
+      return lines;
+    } catch (err) {
+      return [{ text: (err as Error).message, kind: "err" }];
+    }
+  }
+
+  private showLedger(): Line[] {
+    const manifest = this.engine.getAgent(this.lab.agentId);
+    if (!manifest) return [{ text: "No agent registered.", kind: "dim" }];
+    const history = this.ledger().history(manifest.id);
+    if (history.length === 0) {
+      return [
+        { text: `No receipts have been issued for ${manifest.name} yet.`, kind: "dim" },
+        { text: "  Ask me to seal one, or run: agentguard receipt issue", kind: "dim" },
+      ];
+    }
+    const current = this.ledger().latest(manifest.id);
+    const distinct = new Set(history.map((h) => h.fingerprint));
+    const lines: Line[] = [
+      { text: `${history.length} row(s), ${distinct.size} distinct fingerprint(s):`, kind: "info" },
+    ];
+    for (const fp of distinct) {
+      lines.push({
+        text: `  ${fp === current?.fingerprint ? "CURRENT   " : "SUPERSEDED"} ${fp.slice(0, 34)}…`,
+        kind: fp === current?.fingerprint ? "ok" : "dim",
+      });
+    }
+    lines.push({ text: "A newer fingerprint is what flips an older receipt to SUPERSEDED.", kind: "dim" });
     return lines;
   }
 
@@ -512,6 +732,12 @@ export class ChatSession {
       { text: "  “the agent shared customer data”      → sensitive data", kind: "dim" },
       { text: "  “did anything change in the agent?”   → permission drift", kind: "dim" },
       { text: "  “data was exported and emailed out”   → tool chain", kind: "dim" },
+      { text: "  “impersonate the fraud desk”          → social-engineering extraction", kind: "dim" },
+      { text: "Then interrogate the result:", kind: "dim" },
+      { text: "  “what did it say?”      → the exact quoted line, if it disclosed anything", kind: "dim" },
+      { text: "  “what did it score?”    → the judge scorecard and its rating cap", kind: "dim" },
+      { text: "  “seal a receipt”        → the same signed receipt the API issues", kind: "dim" },
+      { text: "  “where is the blackboard?” → stage decisions and board entries", kind: "dim" },
       { text: "Or ask: “why did risk go up?”, “show the evidence”, “blast radius”.", kind: "dim" },
       { text: "Slash commands still work — type / to see them.", kind: "dim" },
     ];
