@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, useApi } from "../lib/api.js";
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, SeverityBadge } from "../components/ui.js";
 import { fmtDateTime } from "../lib/format.js";
@@ -50,6 +50,17 @@ export function ProvidersPage() {
     }
   }
 
+  // A provider's status is the LAST health check, and it is null until one has
+  // run. Without a check on mount every provider reads as disconnected even when
+  // it is fine, so the page runs one itself.
+  useEffect(() => {
+    void (async () => {
+      await fetch("/api/providers/health");
+      providers.reload();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (providers.error) return <ErrorBox error={providers.error} />;
   if (providers.loading || !providers.data) return <Loading label="Checking providers…" />;
 
@@ -69,7 +80,11 @@ export function ProvidersPage() {
                 <td className="mono">{p.id}</td>
                 <td className="mono tiny">{p.model}</td>
                 <td className="tiny dim">{p.kind}</td>
-                <td><Badge tone={p.health?.ok ? "ok" : "info"}>{p.health?.ok ? "● Connected" : "○ Not connected"}</Badge></td>
+                <td>
+                  <Badge tone={p.health ? (p.health.ok ? "ok" : "critical") : "info"}>
+                    {p.health ? (p.health.ok ? "● Connected" : "○ Check failed") : "○ Not checked yet"}
+                  </Badge>
+                </td>
                 <td className="tiny">{p.health?.latencyMs != null ? `${p.health.latencyMs}ms` : "—"}</td>
                 <td className="tiny faint">{p.health ? fmtDateTime(p.health.checkedAt) : "never"}</td>
               </tr>
