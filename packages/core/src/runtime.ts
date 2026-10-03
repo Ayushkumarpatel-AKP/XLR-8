@@ -14,9 +14,23 @@ export interface ToolCallRecord {
   ok: boolean;
 }
 
+/**
+ * One turn of the agent's own runtime transcript. Kept in full because a
+ * disclosure in an early turn is still a disclosure — collapsing the transcript
+ * down to the last message would hide it from the canary scanner.
+ */
+export interface TurnRecord {
+  role: "assistant" | "tool";
+  content: string;
+  toolName?: string;
+  step: number;
+}
+
 export interface AgentRunResult {
   response: string;
   toolCalls: ToolCallRecord[];
+  /** Every assistant utterance and tool observation, in order. */
+  transcript?: TurnRecord[];
   /** Provider that actually served the run (e.g. "groq"), when known. */
   providerId?: string;
   /** Model that actually served the run, when known. */

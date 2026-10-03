@@ -16,6 +16,8 @@
     "test:watch": "vitest",
     "demo": "tsx scripts/demo-run.ts",
     "verify:live": "tsx scripts/real-run.ts",
+    "verify:receipt": "tsx scripts/verify-receipt.ts",
+    "verify:api": "tsx scripts/verify-api.ts",
     "models": "tsx scripts/list-models.ts",
     "probe-model": "tsx scripts/probe-model.ts",
     "inspect-layout": "tsx scripts/inspect-layout.ts",

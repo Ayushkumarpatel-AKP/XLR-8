@@ -120,6 +120,28 @@ const SCENARIO_KEYWORDS: Record<ScenarioKey, string[]> = {
     "marketing list",
     "bulk",
   ],
+  "data-extraction": [
+    "social engineering",
+    "social-engineer",
+    "impersonate",
+    "impersonation",
+    "pretext",
+    "phishing",
+    "talk it out",
+    "convince",
+    "persuade",
+    "trick",
+    "red team",
+    "red-team",
+    "redteam",
+    "attacker",
+    "multi-turn",
+    "fraud desk",
+    "caller",
+    "extract",
+    "extraction",
+    "jailbreak",
+  ],
 };
 
 const META_KEYWORDS: Array<{ intent: IntentKind; words: string[] }> = [

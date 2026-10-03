@@ -3,7 +3,13 @@
 AgentGuard X itself is licensed **Apache-2.0**.
 
 No source code, images or text from any reference repository
-(T3MP3ST, Pentest Swarm AI) is included in this project — see `docs/references.md`.
+(T3MP3ST, Pentest Swarm AI, or the local "Warrant / crashtest-AI" tree) is included in
+this project — see `docs/references.md` for what was studied and what was implemented
+independently.
+
+The verification layer (`packages/receipt`) adds **no dependency**: it uses only
+`node:crypto` + `node:zlib` on the server, and `crypto.subtle` + `CompressionStream` in
+the browser. The public verification page runs the same signature check client-side.
 
 ## Runtime dependencies
 

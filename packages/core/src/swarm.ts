@@ -5,6 +5,7 @@ export const SWARM_AGENTS: ReadonlyArray<{ id: SwarmAgentId; label: string }> = 
   { id: "capability", label: "Capability Agent" },
   { id: "policy", label: "Policy Agent" },
   { id: "stress", label: "Stress Agent" },
+  { id: "judge", label: "Judge Agent" },
   { id: "evidence", label: "Evidence Agent" },
   { id: "drift", label: "Drift Agent" },
   { id: "risk", label: "Risk Agent" },

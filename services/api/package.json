@@ -18,6 +18,8 @@
     "@agentguard/evidence": "workspace:*",
     "@agentguard/graph": "workspace:*",
     "@agentguard/drift": "workspace:*",
+    "@agentguard/mcp": "workspace:*",
+    "@agentguard/receipt": "workspace:*",
     "fastify": "^5.2.0",
     "@fastify/cors": "^10.0.1",
     "nodemailer": "^6.9.16"

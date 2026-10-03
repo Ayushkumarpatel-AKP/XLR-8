@@ -5,6 +5,7 @@ export * from "./snapshot.js";
 export * from "./events.js";
 export * from "./policy.js";
 export * from "./evidence.js";
+export * from "./canary.js";
 export * from "./finding.js";
 export * from "./risk.js";
 export * from "./mission.js";

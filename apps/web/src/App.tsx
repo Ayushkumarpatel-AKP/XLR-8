@@ -13,6 +13,8 @@ import { TestingPage } from "./pages/Testing.js";
 import { PoliciesPage, ProvidersPage, ReportsPage } from "./pages/System.js";
 import { SettingsPage } from "./pages/Settings.js";
 import { LandingPage } from "./pages/Landing.js";
+import { ReceiptsPage } from "./pages/Receipts.js";
+import { VerifyPage } from "./pages/Verify.js";
 import { AlertBell } from "./components/AlertBell.js";
 import { agentLabel, useAgents } from "./lib/agent-context.js";
 import { useApi, api } from "./lib/api.js";
@@ -46,7 +48,10 @@ const NAV: Array<{ section: string; items: Array<{ to: string; label: string; ic
   },
   {
     section: "Testing",
-    items: [{ to: "/testing", label: "Attack Scenarios", icon: "⚛" }],
+    items: [
+      { to: "/testing", label: "Attack Scenarios", icon: "⚛" },
+      { to: "/receipts", label: "Signed Receipts", icon: "▣" },
+    ],
   },
   {
     section: "System",
@@ -157,6 +162,7 @@ function titleFor(path: string): string {
     "/graph": "Trust & Capability Graph",
     "/blast-radius": "Blast Radius Simulator",
     "/testing": "Attack Scenarios",
+    "/receipts": "Signed Receipts",
     "/target": "Agent Under Test",
     "/policies": "Policies",
     "/providers": "Model Providers",
@@ -168,6 +174,10 @@ function titleFor(path: string): string {
 }
 
 export function App() {
+  const location = useLocation();
+  // Verification is deliberately public: it must not sit behind the app shell.
+  if (location.pathname.startsWith("/verify/")) return <VerifyPage />;
+
   return (
     <div className="app">
       <Sidebar />
@@ -191,6 +201,8 @@ export function App() {
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/blast-radius" element={<BlastRadiusPage />} />
             <Route path="/testing" element={<TestingPage />} />
+            <Route path="/receipts" element={<ReceiptsPage />} />
+            <Route path="/verify/:fingerprint" element={<VerifyPage />} />
             <Route path="/policies" element={<PoliciesPage />} />
             <Route path="/providers" element={<ProvidersPage />} />
             <Route path="/reports" element={<ReportsPage />} />

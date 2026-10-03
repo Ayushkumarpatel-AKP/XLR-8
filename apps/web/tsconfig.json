@@ -17,6 +17,7 @@
     "allowImportingTsExtensions": true,
     "baseUrl": ".",
     "paths": {
+      "@agentguard/receipt/shared": ["../../packages/receipt/src/shared.ts"],
       "@agentguard/contracts": ["../../packages/contracts/src/index.ts"]
     }
   },

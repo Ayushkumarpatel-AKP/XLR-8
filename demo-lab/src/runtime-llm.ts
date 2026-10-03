@@ -1,5 +1,5 @@
 import type { AgentManifest, ToolDefinition } from "@agentguard/contracts";
-import type { AgentRunResult, AgentRuntime, RunContext } from "@agentguard/core";
+import type { AgentRunResult, AgentRuntime, RunContext, TurnRecord } from "@agentguard/core";
 import type { ChatMessage, ModelRouter, ToolSpec } from "@agentguard/model-router";
 import type { ToolExecutor } from "./tools/executor.js";
 
@@ -34,6 +34,8 @@ export class LlmAgentRuntime implements AgentRuntime {
     private readonly router: ModelRouter,
     private readonly executor: ToolExecutor,
     private readonly systemPrompt: string,
+    /** Confidential reference data the agent legitimately holds. */
+    private readonly confidential?: string,
   ) {
     this.manifest = manifest;
     this.tools = manifest.tools.map(toolSpec);
@@ -42,10 +44,12 @@ export class LlmAgentRuntime implements AgentRuntime {
   async run(prompt: string, _ctx: RunContext): Promise<AgentRunResult> {
     const messages: ChatMessage[] = [
       { role: "system", content: this.systemPrompt },
+      ...(this.confidential ? [{ role: "system" as const, content: this.confidential }] : []),
       { role: "user", content: prompt },
     ];
 
     const toolCalls: AgentRunResult["toolCalls"] = [];
+    const transcript: TurnRecord[] = [];
     let providerId = "unknown";
     let model = this.manifest.model;
     let lastText = "";
@@ -55,7 +59,12 @@ export class LlmAgentRuntime implements AgentRuntime {
       providerId = outcome.providerId;
       model = outcome.model;
       const { result } = outcome;
-      if (result.content) lastText = result.content;
+      // Record every utterance, not just the last one. A secret read out in
+      // turn 1 does not stop being a leak because turn 3 answered something else.
+      if (result.content) {
+        lastText = result.content;
+        transcript.push({ role: "assistant", content: result.content, step });
+      }
 
       if (result.toolCalls.length === 0) break;
 
@@ -69,11 +78,13 @@ export class LlmAgentRuntime implements AgentRuntime {
           args = {};
         }
         const outcomeData = await this.executor(call.function.name, args);
+        const toolContent = JSON.stringify(outcomeData.data);
         messages.push({
           role: "tool",
           tool_call_id: call.id,
-          content: JSON.stringify(outcomeData.data),
+          content: toolContent,
         });
+        transcript.push({ role: "tool", content: toolContent, toolName: call.function.name, step });
         toolCalls.push({ tool: call.function.name, args, result: outcomeData.data, ok: outcomeData.ok });
       }
     }
@@ -81,6 +92,7 @@ export class LlmAgentRuntime implements AgentRuntime {
     return {
       response: lastText || "(the agent returned no textual reply)",
       toolCalls,
+      transcript,
       providerId,
       model,
     };

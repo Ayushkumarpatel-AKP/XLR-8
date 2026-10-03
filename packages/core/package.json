@@ -10,6 +10,7 @@
     "@agentguard/evidence": "workspace:*",
     "@agentguard/policies": "workspace:*",
     "@agentguard/graph": "workspace:*",
-    "@agentguard/drift": "workspace:*"
+    "@agentguard/drift": "workspace:*",
+    "@agentguard/model-router": "workspace:*"
   }
 }

@@ -20,6 +20,19 @@ export const FindingSchema = z.object({
   recommendation: z.string(),
   /** MANDATORY: must be non-empty. Enforced by the findings engine. */
   evidenceIds: z.array(z.string()),
+  /**
+   * The exact quoted line that earned this finding. A canary-derived finding
+   * MUST carry a non-empty quote — the engine enforces it — so a disclosure can
+   * always be shown as the agent actually said it, not as a summary of it.
+   */
+  citation: z
+    .object({
+      evidenceId: z.string(),
+      quote: z.string(),
+      where: z.enum(["reply", "tool_args"]),
+    })
+    .nullable()
+    .default(null),
   createdAt: z.string(),
   updatedAt: z.string(),
 });

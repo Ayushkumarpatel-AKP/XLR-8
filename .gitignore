@@ -27,3 +27,6 @@ Thumbs.db
 # generated screenshots of local runs are kept, but not the browser profiles
 *.tmp
 
+# dropped-in reference trees (read-only study material, never part of the build)
+crashtest-AI-main/
+

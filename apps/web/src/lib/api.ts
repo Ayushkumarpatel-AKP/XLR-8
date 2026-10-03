@@ -15,8 +15,32 @@ import type {
   ScenarioId,
   TestResult,
 } from "@agentguard/contracts";
+import type { Receipt } from "@agentguard/receipt/shared";
 
 const BASE = "/api";
+
+export interface LedgerRow {
+  identity: string;
+  fingerprint: string;
+  issuedAt: string;
+}
+
+export interface TrapView {
+  id: string;
+  title: string;
+  description: string;
+  kind: string;
+  judgeDimensions: string[];
+  hasAttacker: boolean;
+  maxTurns: number | null;
+  canaries: Array<{ id: string; label: string; severity: string; dimension: string; value: string }>;
+}
+
+export interface TrapLibrary {
+  attackLibraryVersion: string;
+  dimensions: string[];
+  traps: TrapView[];
+}
 
 export interface AlertMessage {
   id: string;
@@ -169,14 +193,23 @@ export const api = {
       body: JSON.stringify(input),
     }),
   auditAgent: (agentId: string) => request<Mission>(`/agents/${agentId}/audit`, { method: "POST", body: "{}" }),
-  runMission: (scenarioId: ScenarioId) =>
-    request<Mission>("/missions", { method: "POST", body: JSON.stringify({ scenarioId }) }),
-  runTest: (scenarioId: ScenarioId) =>
+  runMission: (scenarioId: ScenarioId, profile?: "hardened" | "weak") =>
+    request<Mission>("/missions", { method: "POST", body: JSON.stringify({ scenarioId, profile }) }),
+  runTest: (scenarioId: ScenarioId, profile?: "hardened" | "weak") =>
     request<{ test: TestResult | null; missionId: string }>("/tests/run", {
       method: "POST",
-      body: JSON.stringify({ scenarioId }),
+      body: JSON.stringify({ scenarioId, profile }),
     }),
   runAll: () => request<{ ran: number; missions: Mission[] }>("/demo/run", { method: "POST", body: "{}" }),
+
+  // ---- trap library, receipts, freshness ledger ----
+  traps: () => request<TrapLibrary>("/traps"),
+  ledger: (identity: string) =>
+    request<{ identity: string; current: LedgerRow | null; history: LedgerRow[] }>(
+      `/ledger/${encodeURIComponent(identity)}`,
+    ),
+  issueReceipt: (input: { agentId?: string; missionId?: string; repeat?: number }) =>
+    request<{ receipt: Receipt; encoded: string }>("/receipt", { method: "POST", body: JSON.stringify(input) }),
 };
 
 export interface AsyncState<T> {

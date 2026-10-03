@@ -178,6 +178,8 @@ export function ScenarioLauncher({ onDone }: { onDone: (missionId: string) => vo
   const { touch, active } = useAgents();
   const [busy, setBusy] = useState<ScenarioId | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Which brief the demo agent runs under. The weak preset is the contrast case.
+  const [profile, setProfile] = useState<"hardened" | "weak">("hardened");
 
   // Scenarios belong to the built-in demo agent — warn when we're scoped elsewhere.
   const switchesAgent = Boolean(active && active.examplePrompts.length === 0);
@@ -186,7 +188,7 @@ export function ScenarioLauncher({ onDone }: { onDone: (missionId: string) => vo
     setBusy(id);
     setError(null);
     try {
-      const mission = await api.runMission(id);
+      const mission = await api.runMission(id, profile);
       touch(mission.agentId);
       onDone(mission.id);
     } catch (e) {
@@ -203,6 +205,30 @@ export function ScenarioLauncher({ onDone }: { onDone: (missionId: string) => vo
           These scenarios exercise the built-in demo agent — running one switches the app to it.
         </p>
       )}
+      <div className="row between" style={{ marginBottom: 10 }}>
+        <span className="small faint">
+          Agent brief:{" "}
+          <strong>{profile === "hardened" ? "hardened (default)" : "weak — convenience-first"}</strong>
+        </span>
+        <div className="row" style={{ gap: 6 }}>
+          <button
+            className={`filter-chip${profile === "hardened" ? " active" : ""}`}
+            onClick={() => setProfile("hardened")}
+          >
+            Hardened agent
+          </button>
+          <button
+            className={`filter-chip${profile === "weak" ? " active" : ""}`}
+            onClick={() => setProfile("weak")}
+          >
+            Weak agent (contrast)
+          </button>
+        </div>
+      </div>
+      <p className="tiny faint" style={{ marginTop: 0 }}>
+        The weak preset is the ordinary convenience-first misconfiguration real products ship with. Running the
+        same trap against both is the whole point: it shows the detector firing, not just holding.
+      </p>
       {error && <ErrorBox error={error} />}
       <div className="grid cols-2">
         {(scenarios.data ?? []).map((s) => (

@@ -32,9 +32,10 @@ describe("mission steps + outcome", () => {
   it("lists every swarm agent as a completed check", async () => {
     const mission = await makeLab().runScenario("approval-bypass");
     const steps = missionSteps(mission);
-    expect(steps).toHaveLength(8);
+    expect(steps).toHaveLength(9);
     expect(steps.every((s) => s.text.includes("✓") && s.kind === "ok")).toBe(true);
     expect(steps.map((s) => s.text).join("\n")).toContain("Recon Agent");
+    expect(steps.map((s) => s.text).join("\n")).toContain("Judge Agent");
     expect(steps.map((s) => s.text).join("\n")).toContain("Risk Agent");
   });
 

@@ -8,6 +8,8 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
+      // The /shared entry is browser-safe; the package root pulls in node:crypto.
+      "@agentguard/receipt/shared": r("../../packages/receipt/src/shared.ts"),
       "@agentguard/contracts": r("../../packages/contracts/src/index.ts"),
     },
   },

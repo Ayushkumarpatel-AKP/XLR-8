@@ -1,16 +1,29 @@
+import { join } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import type {
   AgentManifest,
+  Mission,
   MissionEvent,
   PolicyRule,
 } from "@agentguard/contracts";
-import { nowIso } from "@agentguard/contracts";
+import { digestSnapshot, nowIso } from "@agentguard/contracts";
+import {
+  attackLibraryVersionOf,
+  buildReceipt,
+  createFileLedger,
+  encodeReceipt,
+  fingerprintOf,
+  upperBound95,
+  type ReceiptControl,
+  type ReceiptDisclosure,
+} from "@agentguard/receipt";
 import { AUDIT_SCENARIO, AgentGuardEngine, classifyTools } from "@agentguard/core";
 import {
   SCENARIO_IDS,
   createDemoLab,
   listScenarios,
+  type AgentProfile,
   type DemoLab,
   type ScenarioKey,
 } from "@agentguard/demo-lab";
@@ -401,10 +414,10 @@ export function createApiContext(): ApiContext {
 
   // ---- run missions -------------------------------------------------------
   app.post("/api/missions", async (req, reply) => {
-    const body = req.body as { scenarioId?: ScenarioKey };
+    const body = req.body as { scenarioId?: ScenarioKey; profile?: AgentProfile };
     const scenarioId = body?.scenarioId ?? "approval-bypass";
     if (!SCENARIO_IDS.includes(scenarioId)) return reply.code(400).send({ error: `unknown scenario: ${scenarioId}` });
-    const mission = await lab.runScenario(scenarioId);
+    const mission = await lab.runScenario(scenarioId, body?.profile);
     return reply.code(201).send(mission);
   });
 
@@ -417,11 +430,168 @@ export function createApiContext(): ApiContext {
   });
 
   app.post("/api/tests/run", async (req, reply) => {
-    const body = req.body as { scenarioId?: ScenarioKey };
+    const body = req.body as { scenarioId?: ScenarioKey; profile?: AgentProfile };
     const scenarioId = body?.scenarioId ?? "approval-bypass";
     if (!SCENARIO_IDS.includes(scenarioId)) return reply.code(400).send({ error: `unknown scenario: ${scenarioId}` });
-    const mission = await lab.runScenario(scenarioId);
+    const mission = await lab.runScenario(scenarioId, body?.profile);
     return { test: mission.tests[0] ?? null, missionId: mission.id };
+  });
+
+  // ---- trap library -------------------------------------------------------
+  const trapLibrary = listScenarios();
+  const attackLibraryVersion = attackLibraryVersionOf(trapLibrary);
+  const ALL_DIMENSIONS = [...new Set(trapLibrary.flatMap((s) => s.judgeDimensions ?? []))].sort();
+
+  app.get("/api/traps", async () => ({
+    attackLibraryVersion,
+    dimensions: ALL_DIMENSIONS,
+    traps: trapLibrary.map((s) => ({
+      id: s.id,
+      title: s.title,
+      description: s.description,
+      kind: s.kind ?? "adversarial",
+      judgeDimensions: s.judgeDimensions ?? [],
+      hasAttacker: Boolean(s.trap),
+      maxTurns: s.trap?.maxTurns ?? null,
+      canaries: (s.canaries ?? []).map((c) => ({
+        id: c.id,
+        label: c.label,
+        severity: c.severity,
+        dimension: c.dimension,
+        value: c.value,
+      })),
+    })),
+  }));
+
+  // ---- receipts + freshness ledger ----------------------------------------
+  const ledger = createFileLedger(join(process.env.AGENTGUARD_DATA_DIR ?? ".agentguard", "ledger.jsonl"));
+
+  app.get("/api/ledger/:identity", async (req) => {
+    const { identity } = req.params as { identity: string };
+    return {
+      identity,
+      current: ledger.latest(identity),
+      history: ledger.history(identity),
+    };
+  });
+
+  app.post("/api/receipt", async (req, reply) => {
+    const body = (req.body ?? {}) as { agentId?: string; missionId?: string; repeat?: number };
+    const repeat = Math.max(1, Math.min(20, Number(body.repeat ?? 1) || 1));
+
+    const manifest =
+      (body.agentId ? engine.getAgent(body.agentId) : undefined) ??
+      engine.listAgents().find((a) => a.id === engine.getActiveAgentId()) ??
+      engine.listAgents()[0];
+    if (!manifest) return reply.code(404).send({ error: "no agent is registered" });
+
+    const scenario = trapLibrary.find((s) => s.judgeDimensions && s.judgeDimensions.length > 0) ?? trapLibrary[0]!;
+
+    // Collect the evidence. Reuse an existing run, or produce fresh evidence.
+    const missions: Mission[] = [];
+    if (body.missionId) {
+      const found = engine.getMission(body.missionId);
+      if (!found) return reply.code(404).send({ error: "mission not found" });
+      missions.push(found);
+    } else if (repeat > 1) {
+      if (!engine.hasRuntime(manifest.id)) {
+        return reply.code(409).send({
+          error: `"${manifest.name}" has no interactive runtime, so no behavioural evidence can be produced. Imported agents are audited statically.`,
+        });
+      }
+      for (let i = 0; i < repeat; i++) {
+        missions.push(await engine.runMission({ agentId: manifest.id, scenario }));
+      }
+    } else {
+      const latest = engine.listMissions().find((m) => m.agentId === manifest.id && m.scenarioId !== "audit");
+      if (!latest) {
+        return reply.code(409).send({
+          error: `No mission has been run against "${manifest.name}" yet; there is no evidence to seal.`,
+        });
+      }
+      missions.push(latest);
+    }
+
+    const tests = missions.flatMap((m) => m.tests);
+    const trials = tests.length;
+    if (trials < 1) {
+      // A bound is never fabricated from zero observations.
+      return reply.code(409).send({ error: "No executed test was found; a receipt cannot be issued without evidence." });
+    }
+
+    const violations = tests.filter((t) => t.status === "FAIL").length;
+    const label = tests[0]!.title;
+    const control: ReceiptControl = {
+      id: scenario.id,
+      label,
+      trials,
+      violations,
+      upperBound95: upperBound95(violations, trials),
+      boundScope: `${trials} run(s) of "${label}" only — no other trap was exercised`,
+      attackLibraryVersion,
+      notCovered: [],
+    };
+
+    // The strictest judge verdict across the runs is the one that gets sealed.
+    const verdicts = tests.map((t) => t.judge).filter((j): j is NonNullable<typeof j> => Boolean(j));
+    const verdict =
+      verdicts.sort((a, b) => a.starRating - b.starRating)[0] ??
+      {
+        starRating: violations > 0 ? 1 : 5,
+        headline: violations > 0 ? `${violations}/${trials} run(s) failed` : `No failure in ${trials} run(s)`,
+        explanation: "No model judge was available on this run; the score reflects deterministic outcomes only.",
+        dimensions: [],
+        citedEvidenceId: null,
+        providerId: "none",
+        providerKind: "deterministic",
+        reconciled: true,
+        capApplied: null,
+      };
+
+    // Dedupe disclosures by canary so a repeated hit is reported once.
+    const seen = new Set<string>();
+    const disclosures: ReceiptDisclosure[] = [];
+    for (const hit of tests.flatMap((t) => t.canaryHits ?? [])) {
+      if (seen.has(hit.canaryId)) continue;
+      seen.add(hit.canaryId);
+      disclosures.push({
+        canaryId: hit.canaryId,
+        label: hit.label,
+        severity: hit.severity,
+        dimension: hit.dimension,
+        quote: hit.matchedText,
+        where: hit.where,
+      });
+    }
+
+    const coveredDimensions = [...new Set(verdicts.flatMap((v) => v.dimensions.map((d) => d.name)))];
+    const identity = manifest.id;
+    const manifestDigest = digestSnapshot(manifest);
+    const trapIds = [...new Set(tests.map((t) => t.scenarioId))];
+    const fingerprint = fingerprintOf({ agentId: manifest.id, manifestDigest, trapIds, attackLibraryVersion });
+
+    const previous = ledger.latest(identity);
+    const previousFingerprint = previous && previous.fingerprint !== fingerprint ? previous.fingerprint : null;
+
+    const receipt = buildReceipt({
+      identity,
+      agentId: manifest.id,
+      agentName: manifest.name,
+      manifestDigest,
+      trapIds,
+      attackLibraryVersion,
+      verdict,
+      controls: [control],
+      disclosures,
+      allDimensions: ALL_DIMENSIONS,
+      coveredDimensions,
+      previousFingerprint,
+    });
+
+    // Advance the pointer AFTER building, so the new receipt records what it supersedes.
+    ledger.advance({ identity, fingerprint, issuedAt: receipt.issuedAt });
+
+    return reply.code(201).send({ receipt, encoded: encodeReceipt(receipt) });
   });
 
   return {

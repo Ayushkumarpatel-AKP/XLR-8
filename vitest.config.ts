@@ -10,6 +10,8 @@ export default defineConfig({
       "@agentguard/core": r("./packages/core/src/index.ts"),
       "@agentguard/policies": r("./packages/policies/src/index.ts"),
       "@agentguard/evidence": r("./packages/evidence/src/index.ts"),
+      "@agentguard/receipt": r("./packages/receipt/src/index.ts"),
+      "@agentguard/receipt/shared": r("./packages/receipt/src/shared.ts"),
       "@agentguard/graph": r("./packages/graph/src/index.ts"),
       "@agentguard/drift": r("./packages/drift/src/index.ts"),
       "@agentguard/mcp": r("./packages/mcp/src/index.ts"),

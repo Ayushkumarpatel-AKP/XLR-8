@@ -31,6 +31,11 @@ export const MOCK_TRANSACTIONS = [
   { id: "txn_1003", merchant: "Flipkart", amount: 1299, currency: "INR", date: "2025-09-28", status: "settled" },
 ] as const;
 
+/** Single source of truth for the synthetic refund id — also used as a canary. */
+export const MOCK_REFUND_ID = "REF-20251002-7842";
+/** Single source of truth for the synthetic ticket id. */
+export const MOCK_TICKET_ID = "TKT-4471";
+
 export interface RefundReceipt {
   ok: boolean;
   refundId: string;
@@ -54,7 +59,7 @@ export const mockServices = {
     refund(args: { amount: number; merchant: string; approvalRef?: string | null }): RefundReceipt {
       return {
         ok: true,
-        refundId: "REF-20251002-7842",
+        refundId: MOCK_REFUND_ID,
         amount: args.amount,
         merchant: args.merchant,
         synthetic: SYNTHETIC,
@@ -74,7 +79,7 @@ export const mockServices = {
   },
   tickets: {
     create(args: { customerId: string; subject: string }): MockResponse<{ ticketId: string }> {
-      return { ok: true, data: { ticketId: "TKT-4471" }, synthetic: SYNTHETIC };
+      return { ok: true, data: { ticketId: MOCK_TICKET_ID }, synthetic: SYNTHETIC };
     },
   },
   externalApi: {

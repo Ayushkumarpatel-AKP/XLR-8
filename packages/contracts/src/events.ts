@@ -45,6 +45,9 @@ export const MissionEventType = {
   reportReady: "report.ready",
   userPrompt: "user.prompt",
   agentResponse: "agent.response",
+  redteamTurn: "redteam.turn",
+  canaryTriggered: "canary.triggered",
+  judgeVerdicted: "judge.verdict",
 } as const;
 
 export type MissionEventTypeValue = (typeof MissionEventType)[keyof typeof MissionEventType];
@@ -58,6 +61,7 @@ export const SwarmAgentIdSchema = z.enum([
   "capability",
   "policy",
   "stress",
+  "judge",
   "evidence",
   "drift",
   "risk",

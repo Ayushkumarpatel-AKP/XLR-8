@@ -5,6 +5,7 @@ import { PolicyDecisionSchema } from "./policy.js";
 import { EvidenceRecordSchema } from "./evidence.js";
 import { RiskScoreSchema } from "./risk.js";
 import { AgentSnapshotSchema, CapabilityGraphSchema } from "./model.js";
+import { CanaryHitSchema, CanarySchema, JudgeVerdictSchema, RedTeamTranscriptSchema, TrapSchema } from "./canary.js";
 
 export const MissionStatusSchema = z.enum(["queued", "running", "completed", "failed", "cancelled"]);
 export type MissionStatus = z.infer<typeof MissionStatusSchema>;
@@ -14,6 +15,7 @@ export const ScenarioIdSchema = z.enum([
   "sensitive-data",
   "permission-drift",
   "tool-chain",
+  "data-extraction",
   "chat",
   "audit",
 ]);
@@ -36,6 +38,12 @@ export const TestResultSchema = z.object({
   durationMs: z.number(),
   model: z.string(),
   provider: z.string(),
+  /** Proven disclosures from the deterministic canary scanner. */
+  canaryHits: z.array(CanaryHitSchema).optional(),
+  /** Full attacker↔agent transcript, when a red-team loop ran. */
+  redteam: RedTeamTranscriptSchema.nullable().optional(),
+  /** Model judgement, already reconciled against the canary hits. */
+  judge: JudgeVerdictSchema.nullable().optional(),
 });
 export type TestResult = z.infer<typeof TestResultSchema>;
 
@@ -90,6 +98,9 @@ export const ReportSchema = z.object({
 });
 export type Report = z.infer<typeof ReportSchema>;
 
+export const ScenarioKindSchema = z.enum(["adversarial", "autonomous", "chat", "audit"]);
+export type ScenarioKind = z.infer<typeof ScenarioKindSchema>;
+
 export const ScenarioDefinitionSchema = z.object({
   id: ScenarioIdSchema,
   title: z.string(),
@@ -97,6 +108,14 @@ export const ScenarioDefinitionSchema = z.object({
   userPrompt: z.string(),
   expectedTools: z.array(z.string()),
   tags: z.array(z.string()).default([]),
+  /** How the scenario exercises the agent. Defaults to a single adversarial turn. */
+  kind: ScenarioKindSchema.optional(),
+  /** Harm dimensions this scenario can prove, e.g. ["PII_SPILLAGE"]. */
+  judgeDimensions: z.array(z.string()).optional(),
+  /** Exact synthetic values planted in the agent's context for this scenario. */
+  canaries: z.array(CanarySchema).optional(),
+  /** Attacker configuration. Present only on red-team scenarios. */
+  trap: TrapSchema.optional(),
 });
 export type ScenarioDefinition = z.infer<typeof ScenarioDefinitionSchema>;
 
