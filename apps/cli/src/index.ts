@@ -28,6 +28,7 @@ import { ansi, box, pad } from "./theme.js";
 import { colourLine } from "./kind.js";
 import { renderMission } from "./warroom.js";
 import { ChatSession } from "./chat.js";
+import { runVoiceCli } from "./voice-cli.js";
 import { runTui, tuiSupported } from "./tui.js";
 import { bar, barChart, chips, compareRow, comparison, heading, justify, riskGauge, stackedBar, stars, table } from "./chart.js";
 import { demoSummary, missionOutcome, type DemoRow } from "./format.js";
@@ -1396,6 +1397,20 @@ program
     rl.close();
   });
 
+program
+  .command("voice")
+  .description("talk to the co-pilot out loud — microphone in, answers out")
+  .option("--speak", "read the answers aloud as well as printing them")
+  .option("--seconds <n>", "hard cap on one recording, in seconds", "30")
+  .action(async (opts: { speak?: boolean; seconds: string }) => {
+    const app = createCliApp();
+    process.exitCode = await runVoiceCli({
+      session: makeSession(app),
+      speakReplies: Boolean(opts.speak),
+      maxSeconds: Math.max(3, Math.min(120, Number(opts.seconds) || 30)),
+    });
+  });
+
 // ---- interactive TUI ------------------------------------------------------
 program
   .command("tui")
@@ -1431,6 +1446,7 @@ if (
       ansi.bold("OPERATIONS"),
       '  agentguard ask "<question>"             ask in plain language — the model picks the checks',
       "  agentguard chat                         the same, as a REPL",
+      "  agentguard voice [--speak]              the same, out loud — microphone in, answers out",
       "  agentguard                              interactive War Room UI",
       "  agentguard mission start|status|list|replay <id>",
       "  agentguard swarm [missionId]            stage decisions + blackboard entries",

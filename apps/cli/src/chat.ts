@@ -340,6 +340,8 @@ export class ChatSession {
   private lastMissionId: string | null = null;
   private cachedLedger: Ledger | null = null;
   private agentToolCache: AgentTool[] | null = null;
+  /** The model's last plain-language answer, for the voice layer to speak. */
+  private lastSpoken: string | null = null;
 
   constructor(
     private readonly engine: AgentGuardEngine,
@@ -428,7 +430,10 @@ export class ChatSession {
     if (turn.trace.length > 0) {
       out.push({ text: "  checking…", kind: "dim" }, ...turn.trace, { text: "", kind: "dim" });
     }
-    if (turn.text) out.push({ text: turn.text, kind: "accent" });
+    if (turn.text) {
+      out.push({ text: turn.text, kind: "accent" });
+      this.lastSpoken = turn.text;
+    }
     if (turn.lines.length > 0) out.push({ text: "", kind: "dim" }, ...turn.lines);
     if (turn.error) out.push({ text: `  (the model call failed part-way: ${turn.error})`, kind: "warn" });
 
@@ -436,20 +441,32 @@ export class ChatSession {
     return out.length > 0 ? out : null;
   }
 
-  /** Handle one user utterance and return the assistant's reply lines. */
-  async handle(rawInput: string): Promise<Line[]> {
+  /**
+   * One turn, plus the model's plain-language answer on its own.
+   *
+   * `spoken` is what a speech synthesiser should read: the model's sentence, not
+   * the rendered tables underneath it. Null when the deterministic path answered.
+   */
+  async ask(rawInput: string): Promise<{ lines: Line[]; spoken: string | null }> {
     const input = rawInput.trim();
     this.history.push({ role: "user", text: input });
 
     // Prefer the model, which can work out what the user is asking for. The
     // deterministic matcher stays as the fallback, so the CLI never depends on a
     // provider being reachable.
+    this.lastSpoken = null;
     const viaModel = await this.converse(input);
+    const spoken = this.lastSpoken;
     const lines = viaModel ?? (await this.dispatch(input, classify(input)));
 
     this.history.push({ role: "assistant", text: lines.map((l) => l.text).join("\n") });
     if (this.history.length > 24) this.history.splice(0, this.history.length - 24);
-    return lines;
+    return { lines, spoken };
+  }
+
+  /** Handle one user utterance and return the assistant's reply lines. */
+  async handle(rawInput: string): Promise<Line[]> {
+    return (await this.ask(rawInput)).lines;
   }
 
   private async dispatch(input: string, intent: Intent): Promise<Line[]> {

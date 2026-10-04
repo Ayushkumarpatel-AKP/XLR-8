@@ -381,6 +381,36 @@ state and shown *underneath* the model's prose, so the conversation stays human 
 deterministic and checkable. With no tool-capable provider configured, the same commands fall back to
 the deterministic keyword matcher and still work.
 
+### Talk to it
+
+```bash
+agentguard voice            # Enter to speak, Enter to stop
+agentguard voice --speak    # and it reads the answer back to you
+```
+
+```
+ ▄█████████▄
+█           █
+█ ◉◉     ◉◉ █   listening…
+█    ▁▁▁    █   ▂▄▇▃▆█▄
+ ▀█████████▀
+  [Enter] to stop
+```
+
+The bot stays on screen and changes with what is happening — `ready` → `listening…` → `checking…` →
+`answering…` — so you can always see whether it is waiting for you, hearing you, or working.
+
+Speech in is transcribed by Whisper on the provider you already configured; speech out uses the
+platform's own voice (SAPI on Windows, `say` on macOS, `spd-say`/`espeak` on Linux). On Windows,
+recording needs `ffmpeg` on PATH. `agentguard voice` checks all of this up front and tells you what is
+missing rather than failing obscurely, and only the model's own sentence is ever read aloud — never the
+rendered tables.
+
+**Silence is not a command.** Whisper answers a quiet room with a plausible phrase rather than nothing
+(a near-silent clip came back as *"I'm sorry."* during development). The recording's real level is
+measured before it is sent, so a clip that was never speech is reported as *"I did not hear anything in
+6.7s"* instead of being acted on as if you had said it.
+
 ### Interactive UI (default)
 
 `agentguard` with no arguments opens a full-screen terminal UI — a large block-letter
