@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import type { Receipt } from "@agentguard/receipt/shared";
+import { toBase64Url, type Receipt } from "@agentguard/receipt/shared";
 import { Badge, Card, Empty, ErrorBox, Loading, PageHeader, StatCard } from "../components/ui.js";
 import { api, useApi } from "../lib/api.js";
 import { useAgents } from "../lib/agent-context.js";
@@ -43,20 +43,40 @@ function groupByFingerprint(history: Array<{ fingerprint: string; issuedAt: stri
     .sort((a, b) => (a.issuedAt < b.issuedAt ? 1 : -1));
 }
 
+/** Pack a stored receipt the way the server does, so its verification link opens on /verify. */
+async function encodeReceipt(receipt: Receipt): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(receipt));
+  const deflated = new Blob([bytes]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+  return toBase64Url(new Uint8Array(await new Response(deflated).arrayBuffer()));
+}
+
 function ReceiptCard({
   receipt,
   currentFingerprint,
-  link,
 }: {
   receipt: Receipt;
   currentFingerprint: string | null;
-  link: string;
 }) {
   const superseded = currentFingerprint !== null && currentFingerprint !== receipt.fingerprint;
   // Readiness is the ledger's call, not the card's: a receipt only glows while
   // it still holds the fingerprint the ledger points at for this agent.
   const ready = currentFingerprint !== null && currentFingerprint === receipt.fingerprint;
   const [copied, setCopied] = useState(false);
+  const [link, setLink] = useState<string | null>(null);
+
+  // A stored receipt comes back as the signed artifact, not its transport form,
+  // so the verification link has to be rebuilt from the receipt itself.
+  useEffect(() => {
+    let cancelled = false;
+    void encodeReceipt(receipt)
+      .then((encoded) => {
+        if (!cancelled) setLink(verifyUrlFor(receipt.fingerprint, encoded));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [receipt]);
 
   return (
     <Card
@@ -139,22 +159,24 @@ function ReceiptCard({
         <p className="tiny faint">Signing key: {receipt.keyNote}</p>
       </div>
 
-      <div className="row" style={{ gap: 8, marginTop: 12 }}>
-        <a className="btn primary sm" href={link} target="_blank" rel="noreferrer">
-          Open public verification
-        </a>
-        <button
-          className="btn sm"
-          onClick={() => {
-            void navigator.clipboard?.writeText(link).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1600);
-            });
-          }}
-        >
-          {copied ? "Copied ✓" : "Copy verification link"}
-        </button>
-      </div>
+      {link && (
+        <div className="row" style={{ gap: 8, marginTop: 12 }}>
+          <a className="btn primary sm" href={link} target="_blank" rel="noreferrer">
+            Open public verification
+          </a>
+          <button
+            className="btn sm"
+            onClick={() => {
+              void navigator.clipboard?.writeText(link).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1600);
+              });
+            }}
+          >
+            {copied ? "Copied ✓" : "Copy verification link"}
+          </button>
+        </div>
+      )}
     </Card>
   );
 }
@@ -164,7 +186,6 @@ export function ReceiptsPage() {
   const [repeat, setRepeat] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [issued, setIssued] = useState<Array<{ receipt: Receipt; link: string }>>([]);
 
   const ledger = useApi(
     () =>
@@ -174,14 +195,20 @@ export function ReceiptsPage() {
     [active?.agentId],
   );
 
+  // What the workspace actually kept, not just what this tab happened to issue.
+  const receipts = useApi(
+    () => (active ? api.receipts(active.agentId) : Promise.resolve<Receipt[]>([])),
+    [active?.agentId],
+  );
+
   async function issue() {
     if (!active || !active.interactive) return;
     setBusy(true);
     setError(null);
     try {
-      const { receipt, encoded } = await api.issueReceipt({ agentId: active.agentId, repeat });
-      setIssued((prev) => [{ receipt, link: verifyUrlFor(receipt.fingerprint, encoded) }, ...prev]);
+      await api.issueReceipt({ agentId: active.agentId, repeat });
       ledger.reload();
+      receipts.reload();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -192,6 +219,7 @@ export function ReceiptsPage() {
   if (agentsLoading) return <Loading label="Loading agents…" />;
 
   const currentFingerprint = ledger.data?.current?.fingerprint ?? null;
+  const list = receipts.data ?? [];
 
   return (
     <>
@@ -217,8 +245,8 @@ export function ReceiptsPage() {
           hint="changes when the agent or the trap library changes"
         />
         <StatCard
-          label="Issued this session"
-          value={issued.length}
+          label="Receipts on file"
+          value={list.length}
           hint="open a receipt's link to check its signature on /verify"
         />
       </div>
@@ -276,15 +304,19 @@ export function ReceiptsPage() {
 
       <div style={{ height: 16 }} />
 
-      {issued.length === 0 ? (
+      {receipts.loading && list.length === 0 ? (
+        <Loading />
+      ) : receipts.error ? (
+        <ErrorBox error={receipts.error} />
+      ) : list.length === 0 ? (
         <Empty>
           No receipt yet. <Link to="/dashboard">Run a mission against the agent under test</Link>, then seal the
           result here.
         </Empty>
       ) : (
         <div className="col" style={{ gap: 14 }}>
-          {issued.map(({ receipt, link }) => (
-            <ReceiptCard key={receipt.fingerprint + receipt.issuedAt} receipt={receipt} currentFingerprint={currentFingerprint} link={link} />
+          {list.map((receipt) => (
+            <ReceiptCard key={receipt.fingerprint + receipt.issuedAt} receipt={receipt} currentFingerprint={currentFingerprint} />
           ))}
         </div>
       )}

@@ -25,13 +25,18 @@ export default defineConfig({
     include: ["packages/**/*.test.ts", "demo-lab/**/*.test.ts", "services/**/*.test.ts", "tests/**/*.test.ts"],
     environment: "node",
     // Tests must never pick up a real API key from .env — they stay hermetic.
+    // NVIDIA is the primary provider, so a key exported in the operator's shell
+    // sent ~30 model-backed tests to the real API, where they failed on rate
+    // limits. Adding a provider means adding it here too.
     env: {
       AGENTGUARD_NO_DOTENV: "1",
+      NVIDIA_API_KEY: "",
       GROQ_API_KEY: "",
       DEEPSEEK_API_KEY: "",
       HUGGINGFACE_API_KEY: "",
       OLLAMA_BASE_URL: "",
       OPENAI_COMPATIBLE_BASE_URL: "",
+      OPENAI_COMPATIBLE_API_KEY: "",
     },
   },
 });

@@ -37,11 +37,20 @@ function greetingFor(target: AgentTarget): string {
   return `Hi, I'm ${target.name}. ${lead} How can I help?`.replace(/\s+/g, " ");
 }
 
+/**
+ * The schema defaults this array, but a manifest persisted before the import
+ * endpoint validated its input can arrive with the field absent. Reading the
+ * declared classes must never assume it exists.
+ */
+function dataClassesOf(t: AgentTarget["tools"][number]): string[] {
+  return Array.isArray(t.dataClasses) ? t.dataClasses : [];
+}
+
 const RISKY = (t: AgentTarget["tools"][number]): boolean =>
   t.edge === "FINANCIAL" ||
   t.edge === "DEVICE_CONTROL" ||
   t.external ||
-  t.dataClasses.some((d) => d === "pii" || d === "secret");
+  dataClassesOf(t).some((d) => d === "pii" || d === "secret");
 
 /**
  * The agent under test, rendered as *its own* product — not a fixed demo skin.
@@ -281,6 +290,11 @@ function AuditOnlyBody({
         {error && <div className="target-error">⚠ {error}</div>}
 
         <div className="target-tools">
+          {target.tools.length === 0 && (
+            <div className="tiny faint" style={{ padding: "6px 2px" }}>
+              This manifest declares no tools, so there is no capability surface to show or audit.
+            </div>
+          )}
           {target.tools.slice(0, 24).map((t) => (
             <div className={`target-tool${RISKY(t) ? " risky" : ""}`} key={t.name} title={t.description}>
               <span className="mono truncate">{t.name}</span>
@@ -288,7 +302,7 @@ function AuditOnlyBody({
                 <span className="tiny faint">{t.edge}</span>
                 {t.external && <span className="chip">ext</span>}
                 {t.approvalRequired && <span className="chip">approval</span>}
-                {t.dataClasses.slice(0, 2).map((d) => (
+                {dataClassesOf(t).slice(0, 2).map((d) => (
                   <span className="chip" key={d}>{d}</span>
                 ))}
               </span>

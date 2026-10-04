@@ -19,6 +19,7 @@ import {
 export * from "./shared.js";
 export * from "./ledger.js";
 export * from "./issue.js";
+export * from "./store.js";
 
 /* ------------------------------------------------------------------ *
  * Server-side receipt issuance.

@@ -77,7 +77,10 @@ export function buildCapabilityGraph(manifest: AgentManifest): CapabilityGraph {
       evidenceIds: [],
     });
 
-    for (const target of tool.targets) {
+    // `?? []`: a manifest loaded from an older workspace may predate `targets`.
+    // Iterating the missing field threw, and the API surfaced it as a 500 on
+    // /api/graph/:id, which the UI showed as a graph that never finishes loading.
+    for (const target of tool.targets ?? []) {
       if (!nodes.has(target.id)) {
         nodes.set(target.id, {
           id: target.id,

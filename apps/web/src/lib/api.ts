@@ -245,6 +245,9 @@ export const api = {
 
   // ---- trap library, receipts, freshness ledger ----
   traps: () => request<TrapLibrary>("/traps"),
+  /** Every receipt kept for this workspace, newest first — or just one agent's. */
+  receipts: (agentId?: string) =>
+    request<Receipt[]>(agentId ? `/receipts?agentId=${encodeURIComponent(agentId)}` : "/receipts"),
   ledger: (identity: string) =>
     request<{ identity: string; current: LedgerRow | null; history: LedgerRow[] }>(
       `/ledger/${encodeURIComponent(identity)}`,

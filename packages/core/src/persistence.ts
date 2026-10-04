@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { AgentManifestSchema } from "@agentguard/contracts";
 import type { AgentManifest, AgentSnapshot, EvidenceRecord, Mission } from "@agentguard/contracts";
 
 export interface PersistedState {
@@ -18,6 +19,21 @@ export function statePath(dataDir: string): string {
   return join(dataDir, "state.json");
 }
 
+/**
+ * Read a persisted manifest back through the schema, so a workspace written by
+ * an older build behaves like one written by this build and the defaults for
+ * fields that did not exist yet are filled in.
+ *
+ * A manifest the schema cannot parse is kept exactly as it was: this build must
+ * never lose an operator's agent because it is stricter than the one that wrote
+ * it. Repairing the readable ones is what stops the old shape from reaching
+ * code that reasonably assumes the schema holds.
+ */
+function repairAgent(raw: unknown): AgentManifest {
+  const parsed = AgentManifestSchema.safeParse(raw);
+  return parsed.success ? parsed.data : (raw as AgentManifest);
+}
+
 export function loadState(dataDir: string): PersistedState | null {
   const file = statePath(dataDir);
   if (!existsSync(file)) return null;
@@ -28,7 +44,7 @@ export function loadState(dataDir: string): PersistedState | null {
       version: STATE_VERSION,
       missions: parsed.missions ?? [],
       evidence: parsed.evidence ?? [],
-      agents: parsed.agents ?? [],
+      agents: (parsed.agents ?? []).map(repairAgent),
       baselines: parsed.baselines ?? [],
     };
   } catch {

@@ -9,10 +9,17 @@ import type {
   MissionEvent,
   PolicyRule,
 } from "@agentguard/contracts";
-import { AgentRuntimeConfigSchema, CanarySchema, digestSnapshot, nowIso } from "@agentguard/contracts";
+import {
+  AgentManifestSchema,
+  AgentRuntimeConfigSchema,
+  CanarySchema,
+  digestSnapshot,
+  nowIso,
+} from "@agentguard/contracts";
 import {
   attackLibraryVersionOf,
   createFileLedger,
+  createFileReceiptStore,
   encodeReceipt,
   issueReceiptForMissions,
 } from "@agentguard/receipt";
@@ -220,25 +227,25 @@ export function createApiContext(): ApiContext {
       findings: engine.listFindings().filter((f) => f.agentId === id),
     };
   });
+  /**
+   * Register a manifest supplied by a caller.
+   *
+   * Parsed, not assembled field by field. Hand-copying the fields skipped the
+   * schema's defaults, so a caller's tools arrived without `dataClasses`, the
+   * web UI read the missing array, threw, and took the whole page down with it
+   * — a 500-character manifest could blank a screen. The schema is the contract:
+   * input that does not satisfy it is refused here, with the field named.
+   */
   app.post("/api/agents/import", async (req, reply) => {
-    const body = req.body as Partial<AgentManifest>;
-    if (!body?.id || !body?.name) return reply.code(400).send({ error: "manifest requires id and name" });
-    const manifest: AgentManifest = {
-      id: body.id,
-      name: body.name,
-      purpose: body.purpose ?? "",
-      model: body.model ?? "unknown",
-      version: body.version ?? "0.0.0",
-      description: body.description ?? "",
-      owner: body.owner ?? "unknown",
-      environment: body.environment ?? "sandbox",
-      tools: body.tools ?? [],
-      scopes: body.scopes ?? [],
-      mcpServers: body.mcpServers ?? [],
-      externalConnectivity: body.externalConnectivity ?? false,
-      sourceRef: body.sourceRef ?? "api-import",
-    };
-    return engine.registerAgent(manifest);
+    const parsed = AgentManifestSchema.safeParse({ sourceRef: "api-import", ...(req.body ?? {}) });
+    if (!parsed.success) {
+      const first = parsed.error.issues[0];
+      const where = first ? first.path.join(".") || "(root)" : "";
+      return reply
+        .code(400)
+        .send({ error: `invalid agent manifest: ${first ? `${where} ${first.message}` : "unparseable body"}` });
+    }
+    return engine.registerAgent(parsed.data);
   });
 
   app.get("/api/tools", async () => engine.listAgents().flatMap((a) => a.tools));
@@ -658,6 +665,9 @@ export function createApiContext(): ApiContext {
 
   // ---- receipts + freshness ledger ----------------------------------------
   const ledger = createFileLedger(join(process.env.AGENTGUARD_DATA_DIR ?? ".agentguard", "ledger.jsonl"));
+  // The ledger answers "is this still current?"; this answers "what did it say?".
+  // Both are needed to show a receipt again after a reload.
+  const receiptStore = createFileReceiptStore(join(process.env.AGENTGUARD_DATA_DIR ?? ".agentguard", "receipts.jsonl"));
 
   /** The agent a request is about: an explicit id, else the shared active agent. */
   const activeManifest = (agentId?: string): AgentManifest | undefined =>
@@ -672,6 +682,16 @@ export function createApiContext(): ApiContext {
       current: ledger.latest(identity),
       history: ledger.history(identity),
     };
+  });
+
+  /**
+   * Every receipt issued in this workspace, newest first — optionally for one
+   * agent. Without this the page could only show receipts this tab happened to
+   * issue, so a reload lost them and there was nothing for the panel to show.
+   */
+  app.get("/api/receipts", async (req) => {
+    const q = req.query as { agentId?: string };
+    return q.agentId ? receiptStore.forAgent(q.agentId) : receiptStore.all();
   });
 
   app.post("/api/receipt", async (req, reply) => {
@@ -727,6 +747,10 @@ export function createApiContext(): ApiContext {
       // A bound is never fabricated from zero observations.
       return reply.code(409).send({ error: (err as Error).message });
     }
+
+    // Kept before it is returned: the artifact exists from the moment it is
+    // signed, and the ledger row alone cannot reproduce it later.
+    receiptStore.record(receipt);
 
     return reply.code(201).send({ receipt, encoded: encodeReceipt(receipt) });
   });
