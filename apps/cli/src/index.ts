@@ -1415,7 +1415,7 @@ program
 program
   .command("tui")
   .alias("ui")
-  .description("open the interactive terminal UI (Ctrl-V to talk to it)")
+  .description("open the interactive terminal UI (Ctrl-O to talk to it)")
   .option("--speak", "read replies aloud as well as printing them")
   .action(async (opts: { speak?: boolean }) => {
     if (!tuiSupported()) {
@@ -1458,7 +1458,7 @@ if (
       '  agentguard ask "<question>"             ask in plain language — the model picks the checks',
       "  agentguard chat                         the same, as a REPL",
       "  agentguard voice [--speak]              out loud on its own — microphone in, answers out",
-      "  agentguard                              the War Room TUI — Ctrl-V or /voice to talk to it",
+      "  agentguard                              the War Room TUI — Ctrl-O or /voice to talk to it",
       "  agentguard tui [--speak]                the same, named explicitly",
       "  agentguard mission start|status|list|replay <id>",
       "  agentguard swarm [missionId]            stage decisions + blackboard entries",

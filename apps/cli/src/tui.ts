@@ -62,6 +62,21 @@ interface SlashCommand {
 
 const SCENARIO_KEY_SET = new Set<ScenarioKey>(SCENARIO_IDS);
 
+/**
+ * Keys that open the microphone.
+ *
+ * Ctrl-V is what people reach for, but most terminals bind it to paste and never
+ * send it to us — so Ctrl-O, Ctrl-Space and F2 work as well, and Ctrl-O (which no
+ * terminal claims) is the one the chat box advertises.
+ */
+const VOICE_KEYS = new Set(["\x16", "\x0f", "\x00", "\x1bOQ", "\x1b[12~"]);
+/** After the last Enter auto-repeat, treat the key as released. */
+const HOLD_RELEASE_MS = 450;
+/** How long to wait for auto-repeat before falling back to press-to-stop. */
+const HOLD_DETECT_MS = 700;
+/** Hard cap on one recording, so a stuck key cannot run forever. */
+const VOICE_MAX_SECONDS = 60;
+
 /** Events worth surfacing while a mission streams inside the chat. */
 const LIVE_EVENT_TYPES = new Set<string>([
   "tool.call_completed",
@@ -145,9 +160,19 @@ export class Tui {
     label: string;
     hint: string;
     seconds: number;
+    startedAt: number;
     recorder: VoiceRecorder | null;
-    /** "recording" accepts Enter-as-stop; "busy" swallows keys. */
-    mode: "recording" | "busy";
+    /**
+     * "ready"  — the microphone is open, waiting for Enter to be held.
+     * "hold"   — Enter is down: its auto-repeat is the only release signal a
+     *            terminal gives us, so the last repeat we saw means "still held".
+     * "toggle" — auto-repeat is off, so the next Enter press stops instead.
+     * "busy"   — the clip is being handled; keys are ignored.
+     */
+    mode: "ready" | "hold" | "toggle" | "busy";
+    enterRepeats: number;
+    lastEnterAt: number;
+    maxSeconds: number;
   } | null = null;
   private voiceTimer: NodeJS.Timeout | null = null;
   private voiceSupport: VoiceAvailability | null = null;
@@ -483,16 +508,26 @@ export class Tui {
       return;
     }
     // While the microphone is open the only keys that mean anything are the ones
-    // that end it — everything else would land in the input box behind the bot.
+    // that work it — everything else would land in the input box behind the bot.
     if (this.voice) {
-      if (this.voice.mode === "busy") return;
+      const v = this.voice;
+      if (v.mode === "busy") return;
       if (chunk === "\x1b" || chunk === "\x03") return void this.cancelVoice();
-      if (chunk === "\r" || chunk === "\n" || chunk === "\x16") return void this.stopVoice();
+      if (VOICE_KEYS.has(chunk)) return void this.stopVoice();
+      // Enter only means "talk" while the microphone is already open. Outside
+      // voice it still sends the message, which is why this is not in the switch
+      // below.
+      if (chunk === "\r" || chunk === "\n") {
+        if (v.mode === "toggle") return void this.stopVoice();
+        v.mode = "hold";
+        v.enterRepeats++;
+        v.lastEnterAt = Date.now();
+        return;
+      }
       return;
     }
+    if (VOICE_KEYS.has(chunk)) return void this.startVoice();
     switch (chunk) {
-      case "\x16": // Ctrl-V — voice
-        return void this.startVoice();
       case "\x1b[A":
         return this.moveMenu(-1);
       case "\x1b[B":
@@ -575,8 +610,8 @@ export class Tui {
   }
 
   /**
-   * Ctrl-V: open the microphone. The bot takes over the input box for the whole
-   * exchange, so it is obvious whether it is hearing you, working, or done.
+   * Open the microphone. The bot takes over the input box for the whole exchange,
+   * so it is obvious whether it is hearing you, working, or done.
    */
   async startVoice(): Promise<void> {
     if (this.voice || this.busy) return;
@@ -604,19 +639,16 @@ export class Tui {
       state: "listening",
       frame: 0,
       label: "listening…",
-      hint: "Enter stop · Esc cancel",
+      hint: "hold Enter and speak · Esc cancel",
       seconds: 0,
+      startedAt: Date.now(),
       recorder,
-      mode: "recording",
+      mode: "ready",
+      enterRepeats: 0,
+      lastEnterAt: Date.now(),
+      maxSeconds: VOICE_MAX_SECONDS,
     };
-    this.voiceTimer = setInterval(() => {
-      const v = this.voice;
-      if (!v?.recorder) return;
-      v.seconds = v.recorder.seconds;
-      v.label = `listening… ${Math.floor(v.seconds)}s`;
-      v.frame++;
-      this.requestRender();
-    }, 120);
+    this.voiceTimer = setInterval(() => this.voiceTick(), 120);
     this.setStatus("listening");
     this.requestRender();
   }
@@ -626,10 +658,50 @@ export class Tui {
     this.voiceTimer = null;
   }
 
-  /** Enter: stop capturing, transcribe, and drop the words into the input box. */
+  /**
+   * Runs while the microphone is open.
+   *
+   * A terminal sends key PRESSES only — there is no key-up event — so
+   * push-to-talk is built out of Enter's auto-repeat: while the key is held we
+   * keep receiving "\r", and the moment they stop arriving the key was released.
+   * If the terminal has auto-repeat off we never see a second one, so rather than
+   * stopping the instant it began we fall back to press-Enter-to-stop.
+   */
+  private voiceTick(): void {
+    const v = this.voice;
+    if (!v?.recorder) return;
+
+    v.seconds = (Date.now() - v.startedAt) / 1000;
+    v.frame++;
+    const now = Date.now();
+
+    if (v.mode === "hold") {
+      if (v.enterRepeats >= 2 && now - v.lastEnterAt > HOLD_RELEASE_MS) {
+        // The repeats stopped: the key was released.
+        void this.stopVoice();
+        return;
+      }
+      if (v.enterRepeats < 2 && now - v.lastEnterAt > HOLD_DETECT_MS) {
+        // Only one press, so this terminal has auto-repeat off — we cannot tell a
+        // hold from a tap, so ask for a second press rather than cutting them off.
+        v.mode = "toggle";
+        v.hint = "Enter to stop · Esc cancel";
+      }
+    }
+
+    if (v.seconds > v.maxSeconds) {
+      void this.stopVoice();
+      return;
+    }
+
+    v.label = `listening… ${Math.floor(v.seconds)}s`;
+    this.requestRender();
+  }
+
+  /** Enter (released) or the mic key again: transcribe, then run what was said. */
   async stopVoice(): Promise<void> {
     const current = this.voice;
-    if (!current || current.mode !== "recording" || !current.recorder) return;
+    if (!current || current.mode === "busy" || !current.recorder) return;
 
     this.stopVoiceTimer();
     current.mode = "busy";
@@ -675,10 +747,11 @@ export class Tui {
         // showed up in testing and would otherwise have become a command.
         this.say(`That came through as nothing usable${said ? ` (${JSON.stringify(said)})` : ""} — try again.`, "warn");
       } else {
-        // Into the input box rather than straight to the model: a mis-transcribed
-        // word should be fixable before it becomes a command.
+        // Straight through: you spoke, so it runs. The words are echoed into the
+        // log first so it is still clear what was heard.
+        this.say(`  you said: ${said}`, "dim");
         this.input = said;
-        this.refreshMenu();
+        void this.submit();
       }
     } catch (err) {
       cleanup(taken.path);
@@ -928,7 +1001,7 @@ export class Tui {
     // the field, so voice is something you can see rather than something you have
     // to already know about.
     const prompt = "\x1b[1;38;5;208m>\x1b[0m ";
-    const ghost = this.input.length === 0 && !this.closed ? "type, or press Ctrl-V to speak" : "";
+    const ghost = this.input.length === 0 && !this.closed ? "type a message, or press Ctrl-O to speak" : "";
     const visible = visibleLength(prompt) + this.input.length + ghost.length;
     const cursorBlock = this.closed ? "" : "\x1b[7m \x1b[27m";
     const inputContent =
@@ -937,7 +1010,7 @@ export class Tui {
       (ghost ? `\x1b[38;5;240m${ghost}\x1b[0m` : "") +
       cursorBlock +
       " ".repeat(Math.max(0, inner - 2 - visible - 1));
-    const mic = " ● mic · Ctrl-V ";
+    const mic = " ● mic · Ctrl-O ";
     const micFill = inner - 11 - mic.length;
     const boxTop =
       micFill >= 3
@@ -952,9 +1025,11 @@ export class Tui {
 
     // Status
     const hint = this.voice
-      ? this.voice.mode === "recording"
-        ? "Enter stop · Esc cancel"
-        : "working…"
+      ? this.voice.mode === "busy"
+        ? "working…"
+        : this.voice.mode === "toggle"
+          ? "Enter to stop · Esc cancel"
+          : "hold Enter and speak · Esc cancel"
       : this.menuMatches.length > 0
         ? "↑↓ select · Tab complete · Enter run"
         : "/ commands · Enter send · Esc quit";
@@ -976,7 +1051,7 @@ function buildCommands(): SlashCommand[] {
     {
       name: "voice",
       args: "[speak]",
-      description: "talk instead of typing (or press Ctrl-V) — `speak` also reads replies aloud",
+      description: "talk instead of typing (Ctrl-O; Ctrl-V and F2 work too) — `speak` reads replies aloud",
       run(arg, app) {
         if (arg.trim() === "speak") app.toggleSpeak();
         void app.startVoice();

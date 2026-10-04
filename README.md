@@ -383,15 +383,16 @@ the deterministic keyword matcher and still work.
 
 ### Talk to it
 
-Voice is built into the TUI — **Ctrl-V** (or `/voice`) from wherever you are:
+Voice is built into the TUI. The chat box shows the key, so there is nothing to remember:
 
-```bash
-agentguard                  # the War Room TUI; press Ctrl-V to speak
-agentguard tui --speak      # the same, and it reads the replies back to you
-/voice speak                # toggle speaking replies without restarting
+```
+╭─ message ───────────────────────────────────────── ● mic · Ctrl-O ─╮
+│ > type a message, or press Ctrl-O to speak                         │
+╰────────────────────────────────────────────────────────────────────╯
 ```
 
-The bot takes over the input box while it is listening, so the log above it never moves:
+Press **Ctrl-O**, then **hold Enter while you talk** and let go — the bot takes over the input box for
+the whole exchange, so the log above it never moves:
 
 ```
  ▄█████████▄
@@ -399,18 +400,26 @@ The bot takes over the input box while it is listening, so the log above it neve
 █ ◉◉     ◉◉ █   listening…
 █    ▁▁▁    █   ▂▄▇▃▆█▄
  ▀█████████▀
-  [Enter] to stop
+  hold Enter and speak · Esc cancel
 ```
 
 It changes with what is actually happening — `ready` → `listening…` → `checking…` → `answering…` —
-so you can always see whether it is waiting for you, hearing you, or working. **Enter** stops and puts
-the words in the input box (so a mis-heard word is fixable before it becomes a command); **Esc**
-cancels.
+and what it heard is **run straight away**, the way a voice assistant should. **Esc** cancels, and if
+your terminal has key auto-repeat turned off it falls back to *press Enter to stop*.
+
+Ctrl-V and F2 open the microphone too, but most terminals bind Ctrl-V to paste and never pass it on,
+which is why the box advertises Ctrl-O.
+
+```bash
+agentguard                  # the War Room TUI
+agentguard tui --speak      # the same, and it reads the replies back to you
+/voice speak                # toggle speaking replies without restarting
+```
 
 If you want voice on its own, without the TUI:
 
 ```bash
-agentguard voice            # Enter to speak, Enter to stop
+agentguard voice            # press Enter to speak, Enter again to stop
 agentguard voice --speak    # and it reads the answer back to you
 ```
 
