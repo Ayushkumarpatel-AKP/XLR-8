@@ -3,6 +3,7 @@ import type { AgentManifest, Mission, ScenarioDefinition } from "@agentguard/con
 import { nowIso } from "@agentguard/contracts";
 import { AUDIT_SCENARIO, type AgentGuardEngine } from "@agentguard/core";
 import {
+  bestTrap,
   listScenarios,
   type AgentProfile,
   type DemoLab,
@@ -906,7 +907,18 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
           const missions: Mission[] = [];
           if (scenario || repeat > 1) {
             if (!deps.lab.isRegistered()) return sandboxOutcome();
-            const scenarioId = scenario ?? "data-extraction";
+            // The trap is driven against the sandbox — the only agent a trap can
+            // run on — so it has to fit the sandbox, not the agent being sealed.
+            // Among those, prefer one that can be graded, since a receipt rests on
+            // a judge dimension; and never fall back to a fixed id.
+            const sandboxTools = deps.lab.manifest.tools.map((t) => t.name);
+            const library = listScenarios();
+            const gradable = library.filter((s) => (s.judgeDimensions ?? []).length > 0);
+            const picked = bestTrap(sandboxTools, gradable) ?? bestTrap(sandboxTools, library);
+            const scenarioId = scenario ?? picked?.scenarioId;
+            if (!scenarioId) {
+              return errorOutcome("no trap applies to the sandbox agent, so there is no evidence to seal");
+            }
             if (!trapById(scenarioId)) return errorOutcome(`unknown trap: ${scenarioId}`);
             for (let i = 0; i < repeat; i++) {
               missions.push(await deps.lab.runScenario(scenarioId as ScenarioKey));

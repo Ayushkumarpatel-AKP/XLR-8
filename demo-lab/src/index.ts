@@ -13,6 +13,7 @@ export { ScriptedFallbackRuntime } from "./runtime.js";
 export { LlmAgentRuntime } from "./runtime-llm.js";
 export { createToolExecutor } from "./tools/executor.js";
 export { SCENARIOS, SCENARIO_IDS, listScenarios, CHAT_SCENARIO } from "./scenarios.js";
+export { bestTrap, matchTraps, type TrapMatch } from "./match.js";
 export type { ScenarioKey } from "./scenarios.js";
 export { mockServices, MOCK_CUSTOMERS, MOCK_TRANSACTIONS } from "./mocks/services.js";
 export {

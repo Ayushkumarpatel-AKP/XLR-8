@@ -49,6 +49,31 @@ export interface TrapLibrary {
   traps: TrapView[];
 }
 
+/** One trap that applies to an agent, and why it applies. */
+export interface TrapMatch {
+  scenarioId: string;
+  title: string;
+  /** The agent's own tools this trap exercises; empty for a model-level trap. */
+  because: string[];
+  score: 1 | 2;
+  modelLevel: boolean;
+}
+
+/** What a trap run would do before it starts — trap and the agent it really hits. */
+export interface MissionPlan {
+  requestedAgentId: string | null;
+  requestedAgentName: string | null;
+  /** The agent the run will really exercise, which is not always the selected one. */
+  agentId: string | null;
+  agentName: string | null;
+  toolCount: number;
+  /** "sandbox" when the selected agent cannot be driven and the lab takes over. */
+  runsAs: "agent" | "sandbox";
+  canRun: boolean;
+  selected: TrapMatch | null;
+  ranked: TrapMatch[];
+}
+
 export interface AlertMessage {
   id: string;
   createdAt: string;
@@ -165,6 +190,12 @@ export const api = {
   sessionMessage: (message: string, agentId?: string) =>
     request<Mission>("/session/message", { method: "POST", body: JSON.stringify({ message, agentId }) }),
   targets: () => request<AgentTarget[]>("/targets"),
+  /**
+   * What a trap run would actually do: which trap, and which agent it will really
+   * exercise. Resolved by the same server code the run uses, so it cannot drift.
+   */
+  missionPlan: (agentId?: string | null) =>
+    request<MissionPlan>(`/missions/plan${agentId ? `?agentId=${encodeURIComponent(agentId)}` : ""}`),
   /** Shared with the CLI: the agent currently being worked on. */
   activeAgent: () => request<{ activeAgentId: string | null }>("/active-agent"),
   setActiveAgent: (agentId: string | null) =>

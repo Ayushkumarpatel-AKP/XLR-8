@@ -2,7 +2,7 @@ import type { CapabilityGraph, Mission } from "@agentguard/contracts";
 import type { AgentGuardEngine } from "@agentguard/core";
 import { SWARM_AGENTS } from "@agentguard/core";
 import type { DemoLab } from "@agentguard/demo-lab";
-import { SCENARIO_IDS, SCENARIOS, listScenarios, type ScenarioKey } from "@agentguard/demo-lab";
+import { SCENARIO_IDS, SCENARIOS, bestTrap, listScenarios, type ScenarioKey } from "@agentguard/demo-lab";
 import { RESET, colourLine, fit, stripAnsi, visibleLength, wrap, type Kind, type Line } from "./kind.js";
 import { renderBanner } from "./banner.js";
 import { ChatSession, classify, type AskOptions } from "./chat.js";
@@ -1467,7 +1467,21 @@ function buildCommands(): SlashCommand[] {
       description: "run one scenario and grade it",
       async run(arg, app) {
         if (!(await app.preflight())) return;
-        const id: ScenarioKey = arg && SCENARIO_KEY_SET.has(arg as ScenarioKey) ? (arg as ScenarioKey) : "approval-bypass";
+        // Naming a trap is an instruction. With none named, take the one that fits
+        // the agent this run will actually drive — which is the sandbox, the only
+        // agent a trap can be aimed at — rather than whichever sits first in the
+        // library.
+        const id: ScenarioKey | undefined =
+          arg && SCENARIO_KEY_SET.has(arg as ScenarioKey)
+            ? (arg as ScenarioKey)
+            : (bestTrap(
+                app.lab.manifest.tools.map((t) => t.name),
+                SCENARIO_IDS.map((s) => SCENARIOS[s]),
+              )?.scenarioId as ScenarioKey | undefined);
+        if (!id) {
+          app.say("no trap applies to the sandbox agent, and there is no model-level trap to fall back on.", "err");
+          return;
+        }
         app.say(`▶ running ${SCENARIOS[id].title}…`, "accent");
         let m: Mission;
         try {

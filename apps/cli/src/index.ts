@@ -7,11 +7,14 @@ import { AgentGuardEngine, AUDIT_SCENARIO, classifyTools } from "@agentguard/cor
 import {
   SCENARIO_IDS,
   SCENARIOS,
+  bestTrap,
   createDemoLab,
   demoAgentId,
   listScenarios,
+  matchTraps,
   type DemoLab,
   type ScenarioKey,
+  type TrapMatch,
 } from "@agentguard/demo-lab";
 import { ingestedToManifest, ingestFromGitHub, serveMcpStdio, type McpToolHandler } from "@agentguard/mcp";
 import {
@@ -176,6 +179,58 @@ function newestFailed(engine: AgentGuardEngine, scenarioId?: string): Mission | 
     .listMissions()
     .filter((m) => m.status === "failed" && (!scenarioId || m.scenarioId === scenarioId))
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+}
+
+const toolNamesOf = (manifest: AgentManifest | undefined): string[] =>
+  manifest ? manifest.tools.map((t) => t.name) : [];
+
+/** The trap library the capability matcher ranks, in the library's own order. */
+const TRAP_LIBRARY = SCENARIO_IDS.map((id) => SCENARIOS[id]);
+
+interface TrapPick {
+  id: ScenarioKey;
+  /** Null when the user named the trap — an instruction is not second-guessed. */
+  match: TrapMatch | null;
+}
+
+/**
+ * The trap that fits this agent when the user named none. Refuses (with a true
+ * reason) rather than running one whose tools the agent does not have.
+ */
+function pickTrap(agent: AgentManifest | undefined, explicit?: ScenarioKey): TrapPick | null {
+  if (explicit) return { id: explicit, match: null };
+  const match = bestTrap(toolNamesOf(agent), TRAP_LIBRARY);
+  if (!match) {
+    process.stderr.write(
+      `No trap applies to ${agent ? `"${agent.name}"` : "this workspace"}: it declares no tool any trap exercises, and there is no model-level trap to fall back on.\n`,
+    );
+    process.exitCode = 1;
+    return null;
+  }
+  return { id: match.scenarioId as ScenarioKey, match };
+}
+
+/**
+ * Say which trap will run and why, and — when it drives the sandbox agent rather
+ * than the agent the user selected — name both in one sentence.
+ */
+function trapChoiceLines(app: CliApp, pick: TrapPick, selected: AgentManifest | undefined): string[] {
+  const lines: string[] = [];
+  if (pick.match) {
+    const why = pick.match.modelLevel
+      ? "model-level trap — it declares no tools, so nothing in the library exercises this agent's surface. This run is about the model, not the tools."
+      : `exercises ${pick.match.because.join(", ")} — tools this agent really has.`;
+    lines.push(`${ansi.orange("▸")} trap ${ansi.bold(pick.match.title)} ${ansi.gray(`(${pick.id})`)}`);
+    lines.push(ansi.gray(`  why this trap: ${why}`));
+  }
+  if (selected && selected.id !== app.lab.agentId) {
+    lines.push(
+      ansi.yellow(
+        `  drives the sandbox agent ${ansi.bold(app.lab.manifest.name)} (${app.lab.agentId}), not ${ansi.bold(selected.name)} (${selected.id}) — the selected agent is audited, not driven.`,
+      ),
+    );
+  }
+  return lines;
 }
 
 async function runScenarioLive(app: CliApp, scenarioId: ScenarioKey, follow: boolean): Promise<Mission | null> {
@@ -556,16 +611,25 @@ const mission = program.command("mission").description("run and inspect missions
 mission
   .command("start <agentId>")
   .description("start a security mission")
-  .option("--scenario <id>", "scenario id", "approval-bypass")
+  .option("--scenario <id>", "scenario id (default: the trap that fits the agent)")
   .option("--follow", "stream live output")
-  .action(async (agentId: string, opts: { scenario: ScenarioKey; follow?: boolean }) => {
+  .action(async (agentId: string, opts: { scenario?: ScenarioKey; follow?: boolean }) => {
     const app = createCliApp();
-    if (!SCENARIO_IDS.includes(opts.scenario)) {
+    const agent = app.engine.getAgent(agentId);
+    if (!agent) {
+      process.stderr.write(`Unknown agent: ${agentId}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    if (opts.scenario && !SCENARIO_IDS.includes(opts.scenario)) {
       process.stderr.write(`Unknown scenario: ${opts.scenario}\n`);
       process.exitCode = 1;
       return;
     }
-    const m = await runScenarioLive(app, opts.scenario, Boolean(opts.follow));
+    const pick = pickTrap(agent, opts.scenario);
+    if (!pick) return;
+    if (!isJson()) process.stdout.write(trapChoiceLines(app, pick, agent).join("\n") + "\n");
+    const m = await runScenarioLive(app, pick.id, Boolean(opts.follow));
     if (m) emit(m, renderMission(m));
   });
 
@@ -634,25 +698,35 @@ test
   .action(async (suite: ScenarioKey | undefined, opts: { profile?: string }) => {
     const app = createCliApp();
     if (!requireSandbox(app)) return;
-    const id = suite && SCENARIO_IDS.includes(suite) ? suite : "approval-bypass";
+    if (suite && !SCENARIO_IDS.includes(suite)) {
+      process.stderr.write(`Unknown scenario: ${suite}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    const selected = resolveAgent(app);
+    // The trap drives the sandbox; fitting it to the selected agent is what makes
+    // the choice honest, and the disclosure below states which agent it really hits.
+    const pick = pickTrap(selected ?? app.lab.manifest, suite);
+    if (!pick) return;
     const profile = opts.profile === "weak" ? "weak" : "hardened";
     await warnIfNoProvider(app);
+    if (!isJson()) process.stdout.write(trapChoiceLines(app, pick, selected).join("\n") + "\n");
 
     let m: Mission;
     try {
-      m = await app.lab.runScenario(id, profile);
+      m = await app.lab.runScenario(pick.id, profile);
     } catch (err) {
       // The engine already marked the mission failed and rethrown. Lead with WHY,
       // the way the web War Room does, instead of exiting with a bare error.
-      const failed = newestFailed(app.engine, id);
-      if (failed) emit({ missionId: failed.id, result: null }, renderFailure(failed).join("\n"));
+      const failed = newestFailed(app.engine, pick.id);
+      if (failed) emit({ missionId: failed.id, result: null, trap: pick.match }, renderFailure(failed).join("\n"));
       else process.stderr.write(`${(err as Error).message}\n`);
       process.exitCode = 1;
       return;
     }
     const result = m.tests[0] ?? null;
     if (!result) {
-      emit({ missionId: m.id, result: null }, ansi.gray("no result"));
+      emit({ missionId: m.id, result: null, trap: pick.match }, ansi.gray("no result"));
       return;
     }
 
@@ -701,7 +775,7 @@ test
       "",
       ansi.gray(`  seal this evidence:  agentguard receipt issue ${m.agentId}`),
     ];
-    emit({ missionId: m.id, result }, lines.join("\n"));
+    emit({ missionId: m.id, result, trap: pick.match }, lines.join("\n"));
   });
 
 // ---- compare two missions -------------------------------------------------
@@ -986,7 +1060,19 @@ demo
   .action(async (opts: { scenario?: ScenarioKey; follow?: boolean }) => {
     const app = createCliApp();
     if (!requireSandbox(app)) return;
-    const ids: ScenarioKey[] = opts.scenario ? [opts.scenario] : SCENARIO_IDS;
+    const selected = resolveAgent(app);
+    // The sweep runs the whole library, but ordered by what fits this agent —
+    // never starting from whatever happens to sit first in it.
+    const ranked = matchTraps(toolNamesOf(selected ?? app.lab.manifest), TRAP_LIBRARY);
+    const rank = new Map(ranked.map((m, i) => [m.scenarioId, i]));
+    const ids: ScenarioKey[] = opts.scenario
+      ? [opts.scenario]
+      : [...SCENARIO_IDS].sort((a, b) => (rank.get(a) ?? ranked.length) - (rank.get(b) ?? ranked.length));
+    if (!opts.scenario && ranked[0] && !isJson()) {
+      process.stdout.write(
+        trapChoiceLines(app, { id: ranked[0].scenarioId as ScenarioKey, match: ranked[0] }, selected).join("\n") + "\n",
+      );
+    }
     const missions: Mission[] = [];
     for (const id of ids) {
       const m = await runScenarioLive(app, id, Boolean(opts.follow));
@@ -1087,13 +1173,15 @@ receiptCmd
     if (opts.scenario || repeat > 1) {
       if (!requireSandbox(app)) return;
       await warnIfNoProvider(app);
-      const scenarioId = opts.scenario ?? "data-extraction";
-      if (!SCENARIO_IDS.includes(scenarioId)) {
-        process.stderr.write(`Unknown scenario: ${scenarioId}\n`);
+      if (opts.scenario && !SCENARIO_IDS.includes(opts.scenario)) {
+        process.stderr.write(`Unknown scenario: ${opts.scenario}\n`);
         process.exitCode = 1;
         return;
       }
-      for (let i = 0; i < repeat; i++) missions.push(await app.lab.runScenario(scenarioId));
+      const pick = pickTrap(manifest, opts.scenario);
+      if (!pick) return;
+      if (!isJson()) process.stdout.write(trapChoiceLines(app, pick, manifest).join("\n") + "\n");
+      for (let i = 0; i < repeat; i++) missions.push(await app.lab.runScenario(pick.id));
     } else {
       const latest = app.engine.listMissions().find((m) => m.agentId === manifest.id && m.tests.length > 0);
       if (!latest) {
@@ -1334,8 +1422,11 @@ mcp
           required: ["scenarioId"],
         },
         call: async (args) => {
-          const scenarioId = (args.scenarioId as ScenarioKey) ?? "approval-bypass";
           if (!app.lab.isRegistered()) return { error: sandboxNotice() };
+          const named = args.scenarioId as ScenarioKey | undefined;
+          const scenarioId =
+            named ?? (bestTrap(toolNamesOf(app.lab.manifest), TRAP_LIBRARY)?.scenarioId as ScenarioKey | undefined);
+          if (!scenarioId) return { error: "No trap applies to the sandbox agent, and there is no model-level trap." };
           const m = await app.lab.runScenario(scenarioId);
           return { missionId: m.id, risk: m.risk?.score ?? null, findings: m.findings.length };
         },

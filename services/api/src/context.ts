@@ -26,9 +26,11 @@ import {
 import { AUDIT_SCENARIO, AgentGuardEngine, classifyTools } from "@agentguard/core";
 import {
   SCENARIO_IDS,
+  bestTrap,
   createDemoLab,
   demoAgentId,
   listScenarios,
+  matchTraps,
   type AgentProfile,
   type DemoLab,
   type ScenarioKey,
@@ -565,6 +567,41 @@ export function createApiContext(): ApiContext {
   // ---- run missions -------------------------------------------------------
 
   /**
+   * What "Run Security Mission" would do, before it does it.
+   *
+   * It resolves the agent and ranks the traps exactly as `/start` does, so the
+   * answer cannot drift from the run it describes. Two things this has to say out
+   * loud, because the UI hid both: which trap will run, and — when the selected
+   * agent has no runtime, as every imported one does — that the run will exercise
+   * the SANDBOX agent instead.
+   */
+  app.get("/api/missions/plan", async (req) => {
+    const q = req.query as { agentId?: string };
+
+    const sandboxAgent = lab ? engine.getAgent(lab.agentId) : undefined;
+    const named = q.agentId ? engine.getAgent(q.agentId) : undefined;
+    const selectedAgent = named ?? activeManifest();
+    const manifest = named ?? sandboxAgent ?? activeManifest();
+
+    const toolNames = manifest?.tools.map((t) => t.name) ?? [];
+    const ranked = matchTraps(toolNames, trapLibrary);
+
+    return {
+      /** What the caller asked for, if anything. */
+      requestedAgentId: q.agentId ?? null,
+      requestedAgentName: (named ?? selectedAgent)?.name ?? null,
+      /** The agent the run will really exercise. */
+      agentId: manifest?.id ?? null,
+      agentName: manifest?.name ?? null,
+      toolCount: toolNames.length,
+      runsAs: lab && manifest?.id === lab.agentId ? "sandbox" : "agent",
+      canRun: Boolean(manifest && engine.hasRuntime(manifest.id)),
+      selected: ranked[0] ?? null,
+      ranked,
+    };
+  });
+
+  /**
    * Start a trap and return its id immediately.
    *
    * This is what makes a long run watchable: the caller subscribes to
@@ -573,9 +610,6 @@ export function createApiContext(): ApiContext {
    */
   app.post("/api/missions/start", async (req, reply) => {
     const body = (req.body ?? {}) as { scenarioId?: ScenarioKey; profile?: AgentProfile; agentId?: string };
-    const scenarioId = body.scenarioId ?? "approval-bypass";
-    const scenario = trapLibrary.find((s) => s.id === scenarioId);
-    if (!scenario) return reply.code(400).send({ error: `unknown scenario: ${scenarioId}` });
 
     // A trap exercises the sandbox agent by default. Naming an agentId targets
     // that agent instead — but it must be drivable, and a refusal has to say so
@@ -593,6 +627,20 @@ export function createApiContext(): ApiContext {
         error: `"${manifest.name}" has no runtime, so a trap cannot be run against it. Connect a runtime first, or run its static audit.`,
       });
     }
+
+    // With no scenario named, run the trap that actually exercises THIS agent
+    // rather than whichever one happens to sit first in the library. Every trap
+    // already declares the tools it needs; nothing was reading that, so every
+    // run was "Approval Bypass" whatever the agent could do.
+    const scenarioId =
+      body.scenarioId ?? bestTrap(manifest.tools.map((t) => t.name), trapLibrary)?.scenarioId;
+    if (!scenarioId) {
+      return reply.code(409).send({
+        error: `No trap applies to "${manifest.name}": it declares no tool any trap exercises, and there is no model-level trap to fall back on.`,
+      });
+    }
+    const scenario = trapLibrary.find((s) => s.id === scenarioId);
+    if (!scenario) return reply.code(400).send({ error: `unknown scenario: ${scenarioId}` });
 
     // The sandbox agent carries a per-run runtime (the hardened/weak preset), so
     // it starts through the lab; anything else uses its registered adapter.

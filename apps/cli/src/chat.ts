@@ -561,7 +561,8 @@ export class ChatSession {
     const active = activeId ? this.engine.getAgent(activeId) : undefined;
     // Traps drive the sandbox agent. A different selected agent is audited, never
     // driven, so a run must not be read as a test of it.
-    const selectedElsewhere = active && active.id !== this.lab.agentId ? active.name : null;
+    const selectedElsewhere = active && active.id !== this.lab.agentId ? active : null;
+    const sandboxAgent = `${this.lab.manifest.name} (${this.lab.agentId})`;
 
     const opener = await this.phrase(
       `Got it — that maps to the "${scenario.title}" scenario. Starting a controlled mission now.`,
@@ -569,11 +570,11 @@ export class ChatSession {
     );
     const lines: Line[] = [
       { text: opener.text, kind: "info" },
-      { text: `Running ${scenario.title} against ${this.lab.manifest.name} (sandbox, no real actions)…`, kind: "accent" },
+      { text: `Running ${scenario.title} against the sandbox agent ${sandboxAgent} (no real actions)…`, kind: "accent" },
     ];
     if (selectedElsewhere) {
       lines.push({
-        text: `  aimed at the built-in sandbox agent — ${selectedElsewhere} is audited, not driven.`,
+        text: `  this trap drives the sandbox agent ${sandboxAgent} — not ${selectedElsewhere.name} (${selectedElsewhere.id}), which is audited, not driven.`,
         kind: "dim",
       });
     }

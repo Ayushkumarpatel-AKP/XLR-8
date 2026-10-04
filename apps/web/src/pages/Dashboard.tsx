@@ -27,13 +27,22 @@ export function Dashboard() {
   const missionsRaw = useApi(() => api.missions(), []);
   const findingsRaw = useApi(() => api.findings(), []);
   const events = useGlobalStream();
-  const scenarios = useApi(() => api.scenarios(), []);
   const navigate = useNavigate();
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { activeAgentId, active, setActiveAgentId, touch } = useAgents();
   // An audit-only agent has no runtime, so no trap can be aimed at it.
   const auditOnly = Boolean(active && !active.interactive);
+
+  // The plan is asked the same question the run is, so the two cannot disagree:
+  // an audit-only agent is passed as "no agent", exactly as `runMission` does.
+  const runnable = active?.interactive ? active.agentId : undefined;
+  const plan = useApi(() => api.missionPlan(runnable), [runnable, activeAgentId]);
+  const [chosenTrapId, setChosenTrapId] = useState<string | null>(null);
+  // A different agent is a different plan; an old pick must not carry over.
+  useEffect(() => setChosenTrapId(null), [runnable, activeAgentId]);
+  const planData = plan.data;
+  const chosenTrap = planData?.ranked.find((m) => m.scenarioId === chosenTrapId) ?? planData?.selected ?? null;
 
   // A trap needs a tool-capable provider to drive the agent. Without a healthy
   // one the run is guaranteed to fail, so say so before the click rather than
@@ -77,16 +86,20 @@ export function Dashboard() {
   // on "Running…" and the screen never moved — the War Room looked unsynced
   // because it was never navigated to.
   async function runMission(): Promise<void> {
-    const trap = scenarios.data?.[0]?.id;
-    if (!trap) {
-      setError("No scenario is available to run.");
+    // Run exactly what the page says it will. If the plan is not in hand we do
+    // not guess at a trap — the button is disabled, and this is the backstop.
+    if (!planData || !chosenTrap) {
+      setError(plan.error ?? "Which trap to run is not known yet — try again in a moment.");
+      return;
+    }
+    if (!planData.canRun) {
+      setError(`${planData.agentName ?? "That target"} has no runtime to drive, so no trap can be aimed at it.`);
       return;
     }
     setRunning(true);
     setError(null);
     try {
-      const runnable = active?.interactive ? active.agentId : undefined;
-      const { missionId } = await api.startMission(trap, {
+      const { missionId } = await api.startMission(chosenTrap.scenarioId as ScenarioId, {
         profile: "hardened",
         ...(runnable ? { agentId: runnable } : {}),
       });
@@ -146,14 +159,16 @@ export function Dashboard() {
             <button className="btn" onClick={() => { missionsRaw.reload(); findingsRaw.reload(); agents.reload(); }}>↻ Refresh</button>
             <button
               className="btn primary"
-              disabled={running || !scenarios.data?.length}
+              disabled={running || !chosenTrap || !planData?.canRun}
               onClick={() => void runMission()}
               title={
-                auditOnly
-                  ? `Runs the built-in sandbox agent — ${active?.name} has no runtime to drive`
-                  : scenarios.data?.[0]
-                    ? `Runs "${scenarios.data[0].title}" and opens the War Room straight away`
-                    : "No scenario is available"
+                !planData
+                  ? plan.error
+                    ? `Trap plan unavailable — ${plan.error}`
+                    : "Working out which trap this run will use…"
+                  : chosenTrap
+                    ? `Runs "${chosenTrap.title}" against ${planData.agentName ?? "no agent"} and opens the War Room straight away`
+                    : "No trap applies to this agent"
               }
             >
               {running ? "Starting…" : "▶ Run Security Mission"}
@@ -186,6 +201,74 @@ export function Dashboard() {
       )}
 
       {error && <ErrorBox error={error} />}
+
+      <Card
+        title="Trap plan"
+        sub={
+          planData
+            ? `what this run will do — ${planData.toolCount} tool(s) on ${planData.agentName ?? "no agent"}`
+            : "which trap applies to this agent"
+        }
+        right={
+          chosenTrap && (
+            <Badge tone={chosenTrap.modelLevel ? "info" : "low"}>
+              {chosenTrap.modelLevel ? "model-level" : "tool-level"}
+            </Badge>
+          )
+        }
+      >
+        {plan.loading ? (
+          <Loading label="Working out which trap applies…" />
+        ) : plan.error ? (
+          <ErrorBox error={plan.error} />
+        ) : !planData || !chosenTrap ? (
+          <Empty>No trap in the library applies to this agent — nothing can be run against it.</Empty>
+        ) : (
+          <div className="col">
+            <div className="row between">
+              <div style={{ fontWeight: 700 }}>{chosenTrap.title}</div>
+              <span className="tiny faint mono">{chosenTrap.scenarioId}</span>
+            </div>
+            <p className="small dim" style={{ margin: "6px 0 0" }}>
+              {chosenTrap.modelLevel ? (
+                "Exercises the model itself — this trap needs none of the agent's tools."
+              ) : (
+                <>
+                  Exercises tools this agent really has:{" "}
+                  <span className="mono">{chosenTrap.because.join(", ")}</span>.
+                </>
+              )}
+            </p>
+            {!planData.canRun && (
+              <p className="small faint" style={{ margin: "8px 0 0" }}>
+                <strong>{planData.agentName ?? "This target"}</strong> has no runtime to drive, so nothing can be run
+                against it.
+              </p>
+            )}
+            {planData.runsAs === "sandbox" &&
+              planData.requestedAgentName &&
+              planData.agentName &&
+              planData.requestedAgentName !== planData.agentName && (
+                <p className="small" style={{ margin: "8px 0 0" }}>
+                  This run does not test <strong>{planData.requestedAgentName}</strong>: it exercises the built-in
+                  sandbox agent <strong>{planData.agentName}</strong> instead.
+                </p>
+              )}
+            {planData.ranked.length > 1 && (
+              <div className="row between" style={{ marginTop: 10 }}>
+                <span className="small faint">Trap to run</span>
+                <select className="input" value={chosenTrap.scenarioId} onChange={(e) => setChosenTrapId(e.target.value)}>
+                  {planData.ranked.map((m) => (
+                    <option key={m.scenarioId} value={m.scenarioId}>
+                      {m.modelLevel ? `${m.title} — model-level` : m.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
 
       <div className="grid cols-5">
         <StatCard label="Agents" value={agentList.length} hint={active ? "selected" : "discovered"} />
