@@ -1415,8 +1415,9 @@ program
 program
   .command("tui")
   .alias("ui")
-  .description("open the interactive terminal UI")
-  .action(async () => {
+  .description("open the interactive terminal UI (Ctrl-V to talk to it)")
+  .option("--speak", "read replies aloud as well as printing them")
+  .action(async (opts: { speak?: boolean }) => {
     if (!tuiSupported()) {
       process.stderr.write(
         "The interactive TUI needs a real terminal. Try: AGENTGUARD_DEMO=1 agentguard demo run --follow\n",
@@ -1425,7 +1426,12 @@ program
       return;
     }
     const app = createCliApp();
-    await runTui({ engine: app.engine, lab: app.lab, dataDir: app.dataDir });
+    await runTui({
+      engine: app.engine,
+      lab: app.lab,
+      dataDir: app.dataDir,
+      speakReplies: Boolean(opts.speak),
+    });
   });
 
 if (
@@ -1434,7 +1440,12 @@ if (
   (tuiSupported() || process.env.AGENTGUARD_TUI === "1")
 ) {
   const app = createCliApp();
-  await runTui({ engine: app.engine, lab: app.lab, dataDir: app.dataDir });
+  await runTui({
+    engine: app.engine,
+    lab: app.lab,
+    dataDir: app.dataDir,
+    speakReplies: process.env.AGENTGUARD_SPEAK === "1",
+  });
 } else if (process.argv.slice(2).length === 0) {
   process.stdout.write(
     [
@@ -1446,8 +1457,9 @@ if (
       ansi.bold("OPERATIONS"),
       '  agentguard ask "<question>"             ask in plain language — the model picks the checks',
       "  agentguard chat                         the same, as a REPL",
-      "  agentguard voice [--speak]              the same, out loud — microphone in, answers out",
-      "  agentguard                              interactive War Room UI",
+      "  agentguard voice [--speak]              out loud on its own — microphone in, answers out",
+      "  agentguard                              the War Room TUI — Ctrl-V or /voice to talk to it",
+      "  agentguard tui [--speak]                the same, named explicitly",
       "  agentguard mission start|status|list|replay <id>",
       "  agentguard swarm [missionId]            stage decisions + blackboard entries",
       "  agentguard demo run [--scenario <id>] [--follow]",

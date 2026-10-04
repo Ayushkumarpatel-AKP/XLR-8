@@ -25,6 +25,12 @@ const WAV_HEADER_BYTES = 44;
 const SPEAK_MAX_CHARS = 1200;
 /** How long a recorder gets to shut down on its own before it is killed. */
 const STOP_GRACE_MS = 3000;
+/**
+ * Below this RMS a recording is treated as silence — see `wavRms`. Whisper
+ * answers near-silence with a plausible phrase, so every caller checks the level
+ * before acting on a transcript.
+ */
+export const SILENCE_RMS = 0.008;
 
 export interface Recorder {
   kind: "ffmpeg-dshow" | "arecord" | "sox";
@@ -607,6 +613,19 @@ export function cleanup(path: string): void {
   } catch {
     /* already gone, or locked — nothing to do */
   }
+}
+
+/**
+ * Whether a transcript is worth acting on at all.
+ *
+ * Whisper does not return "nothing" for a clip that held no speech — it returns
+ * something plausible: a lone "." in one run of testing, "I'm sorry." in another.
+ * The level check catches most of these, but a noisy room can sit above the
+ * threshold, so require at least two letters or digits before a transcript is
+ * allowed to become a command.
+ */
+export function isUsableTranscript(text: string): boolean {
+  return text.replace(/[\s\p{P}\p{S}]/gu, "").length >= 2;
 }
 
 /**

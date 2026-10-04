@@ -383,10 +383,15 @@ the deterministic keyword matcher and still work.
 
 ### Talk to it
 
+Voice is built into the TUI — **Ctrl-V** (or `/voice`) from wherever you are:
+
 ```bash
-agentguard voice            # Enter to speak, Enter to stop
-agentguard voice --speak    # and it reads the answer back to you
+agentguard                  # the War Room TUI; press Ctrl-V to speak
+agentguard tui --speak      # the same, and it reads the replies back to you
+/voice speak                # toggle speaking replies without restarting
 ```
+
+The bot takes over the input box while it is listening, so the log above it never moves:
 
 ```
  ▄█████████▄
@@ -397,8 +402,17 @@ agentguard voice --speak    # and it reads the answer back to you
   [Enter] to stop
 ```
 
-The bot stays on screen and changes with what is happening — `ready` → `listening…` → `checking…` →
-`answering…` — so you can always see whether it is waiting for you, hearing you, or working.
+It changes with what is actually happening — `ready` → `listening…` → `checking…` → `answering…` —
+so you can always see whether it is waiting for you, hearing you, or working. **Enter** stops and puts
+the words in the input box (so a mis-heard word is fixable before it becomes a command); **Esc**
+cancels.
+
+If you want voice on its own, without the TUI:
+
+```bash
+agentguard voice            # Enter to speak, Enter to stop
+agentguard voice --speak    # and it reads the answer back to you
+```
 
 Speech in is transcribed by Whisper on the provider you already configured; speech out uses the
 platform's own voice (SAPI on Windows, `say` on macOS, `spd-say`/`espeak` on Linux). On Windows,
@@ -407,9 +421,10 @@ missing rather than failing obscurely, and only the model's own sentence is ever
 rendered tables.
 
 **Silence is not a command.** Whisper answers a quiet room with a plausible phrase rather than nothing
-(a near-silent clip came back as *"I'm sorry."* during development). The recording's real level is
-measured before it is sent, so a clip that was never speech is reported as *"I did not hear anything in
-6.7s"* instead of being acted on as if you had said it.
+— a near-silent clip came back as *"I'm sorry."* in one run and a lone *"."* in another. Both are
+caught before they can be acted on: the recording's real level is measured first, and a transcript with
+fewer than two letters or digits is refused. A clip that was never speech is reported as *"I did not
+hear anything in 2.6s"* instead of becoming a command.
 
 ### Interactive UI (default)
 

@@ -6,8 +6,22 @@ import { SCENARIO_IDS, SCENARIOS, listScenarios, type ScenarioKey } from "@agent
 import { RESET, colourLine, fit, stripAnsi, visibleLength, wrap, type Kind, type Line } from "./kind.js";
 import { renderBanner } from "./banner.js";
 import { ChatSession, classify } from "./chat.js";
-import { noAgentNotice, providerWarning, sandboxNotice } from "./support.js";
+import { isDemoAgent, noAgentNotice, providerWarning, sandboxNotice } from "./support.js";
 import { failureReason, renderFailure, renderProviderWarning } from "./verify-view.js";
+import { renderBot, type BotState } from "./bot.js";
+import {
+  cleanup,
+  detectVoice,
+  isUsableTranscript,
+  SILENCE_RMS,
+  speak,
+  transcribe,
+  VoiceRecorder,
+  wavRms,
+  type VoiceAvailability,
+} from "./voice.js";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { demoSummary, findingLines, missionOutcome, missionSteps, missionSummary, type DemoRow } from "./format.js";
 import { graphLegend, renderGraphLines, revealFrames } from "./graph-render.js";
 
@@ -35,6 +49,8 @@ export interface TuiContext {
   engine: AgentGuardEngine;
   lab: DemoLab;
   dataDir: string;
+  /** Read replies aloud as well as printing them. */
+  speakReplies?: boolean;
 }
 
 interface SlashCommand {
@@ -119,11 +135,30 @@ export class Tui {
   /** Set while a mission is in flight so the status bar can carry the live run. */
   private liveRun: { title: string; startedAt: number; redteamTurns: number; responses: number } | null = null;
   private confirmResolve: ((value: boolean) => void) | null = null;
+  /**
+   * Set while the microphone is open or a clip is being handled. While it is
+   * set the bot takes over the input box, so the state is never ambiguous.
+   */
+  private voice: {
+    state: BotState;
+    frame: number;
+    label: string;
+    hint: string;
+    seconds: number;
+    recorder: VoiceRecorder | null;
+    /** "recording" accepts Enter-as-stop; "busy" swallows keys. */
+    mode: "recording" | "busy";
+  } | null = null;
+  private voiceTimer: NodeJS.Timeout | null = null;
+  private voiceSupport: VoiceAvailability | null = null;
+  /** Whether replies are also read aloud. Toggled with `/voice speak`. */
+  private speakReplies = false;
 
   constructor(ctx: TuiContext) {
     this.ctx = ctx;
     this.menuAll = buildCommands();
     this.chat = new ChatSession(ctx.engine, ctx.lab, ctx.engine.router, ctx.dataDir);
+    this.speakReplies = Boolean(ctx.speakReplies);
   }
 
   // ---- public API used by command handlers --------------------------------
@@ -344,6 +379,16 @@ export class Tui {
   private shutdown(): void {
     if (this.closed) return;
     this.closed = true;
+    // Never leave the microphone open behind us.
+    this.stopVoiceTimer();
+    if (this.voice?.recorder) {
+      const path = this.voice.recorder.path;
+      void this.voice.recorder
+        .stop()
+        .catch(() => undefined)
+        .finally(() => cleanup(path));
+      this.voice = null;
+    }
     this.confirmResolve?.(false);
     this.confirmResolve = null;
     this.resolveExit?.();
@@ -437,7 +482,17 @@ export class Tui {
       }
       return;
     }
+    // While the microphone is open the only keys that mean anything are the ones
+    // that end it — everything else would land in the input box behind the bot.
+    if (this.voice) {
+      if (this.voice.mode === "busy") return;
+      if (chunk === "\x1b" || chunk === "\x03") return void this.cancelVoice();
+      if (chunk === "\r" || chunk === "\n" || chunk === "\x16") return void this.stopVoice();
+      return;
+    }
     switch (chunk) {
+      case "\x16": // Ctrl-V — voice
+        return void this.startVoice();
       case "\x1b[A":
         return this.moveMenu(-1);
       case "\x1b[B":
@@ -505,6 +560,152 @@ export class Tui {
     this.requestRender();
   }
 
+  // ---- voice ---------------------------------------------------------------
+
+  private voiceStatus(): VoiceAvailability {
+    this.voiceSupport ??= detectVoice();
+    return this.voiceSupport;
+  }
+
+  /** `/voice speak` — read replies aloud as well as printing them. */
+  toggleSpeak(force?: boolean): boolean {
+    this.speakReplies = force ?? !this.speakReplies;
+    this.say(`spoken replies ${this.speakReplies ? "on" : "off"}`, "dim");
+    return this.speakReplies;
+  }
+
+  /**
+   * Ctrl-V: open the microphone. The bot takes over the input box for the whole
+   * exchange, so it is obvious whether it is hearing you, working, or done.
+   */
+  async startVoice(): Promise<void> {
+    if (this.voice || this.busy) return;
+
+    const support = this.voiceStatus();
+    if (!support.recorder) {
+      this.say(support.recorderDetail, "warn");
+      return;
+    }
+    if (!support.transcribe.ok) {
+      this.say(support.transcribe.detail, "warn");
+      return;
+    }
+
+    const wavPath = join(tmpdir(), `agentguard-voice-${Date.now()}.wav`);
+    const recorder = new VoiceRecorder(support.recorder, wavPath);
+    try {
+      recorder.start();
+    } catch (err) {
+      this.say(`Could not start the microphone: ${(err as Error).message}`, "err");
+      return;
+    }
+
+    this.voice = {
+      state: "listening",
+      frame: 0,
+      label: "listening…",
+      hint: "Enter stop · Esc cancel",
+      seconds: 0,
+      recorder,
+      mode: "recording",
+    };
+    this.voiceTimer = setInterval(() => {
+      const v = this.voice;
+      if (!v?.recorder) return;
+      v.seconds = v.recorder.seconds;
+      v.label = `listening… ${Math.floor(v.seconds)}s`;
+      v.frame++;
+      this.requestRender();
+    }, 120);
+    this.setStatus("listening");
+    this.requestRender();
+  }
+
+  private stopVoiceTimer(): void {
+    if (this.voiceTimer) clearInterval(this.voiceTimer);
+    this.voiceTimer = null;
+  }
+
+  /** Enter: stop capturing, transcribe, and drop the words into the input box. */
+  async stopVoice(): Promise<void> {
+    const current = this.voice;
+    if (!current || current.mode !== "recording" || !current.recorder) return;
+
+    this.stopVoiceTimer();
+    current.mode = "busy";
+    current.state = "thinking";
+    current.label = "transcribing…";
+    current.hint = "";
+    this.requestRender();
+
+    const wavPath = current.recorder.path;
+    let taken: { path: string; seconds: number };
+    try {
+      taken = await current.recorder.stop();
+    } catch (err) {
+      cleanup(wavPath);
+      this.voice = null;
+      this.setStatus(this.readyStatus());
+      this.say(`Recording failed: ${(err as Error).message}`, "err");
+      return;
+    }
+
+    // Whisper answers near-silence with a plausible phrase rather than nothing —
+    // a quiet room produced "I'm sorry." in testing. Check the level first so a
+    // clip that was never speech is never acted on.
+    const level = await wavRms(taken.path);
+    if (level < SILENCE_RMS) {
+      cleanup(taken.path);
+      this.voice = null;
+      this.setStatus(this.readyStatus());
+      this.say(`I did not hear anything in ${taken.seconds.toFixed(1)}s. Try again, closer to the mic.`, "warn");
+      return;
+    }
+
+    current.label = "checking…";
+    this.requestRender();
+
+    try {
+      const { text } = await transcribe(taken.path);
+      cleanup(taken.path);
+      this.voice = null;
+      const said = text.trim();
+      if (!isUsableTranscript(said)) {
+        // Whisper answers a speechless clip with something plausible — a lone "."
+        // showed up in testing and would otherwise have become a command.
+        this.say(`That came through as nothing usable${said ? ` (${JSON.stringify(said)})` : ""} — try again.`, "warn");
+      } else {
+        // Into the input box rather than straight to the model: a mis-transcribed
+        // word should be fixable before it becomes a command.
+        this.input = said;
+        this.refreshMenu();
+      }
+    } catch (err) {
+      cleanup(taken.path);
+      this.voice = null;
+      this.say((err as Error).message, "err");
+    }
+    this.setStatus(this.readyStatus());
+    this.requestRender();
+  }
+
+  /** Esc: drop the recording without using it. */
+  async cancelVoice(): Promise<void> {
+    const current = this.voice;
+    this.stopVoiceTimer();
+    this.voice = null;
+    this.setStatus(this.readyStatus());
+    if (current?.recorder) {
+      try {
+        await current.recorder.stop();
+      } catch {
+        /* already gone */
+      }
+      cleanup(current.recorder.path);
+    }
+    this.say("(voice cancelled)", "dim");
+  }
+
   private async submit(): Promise<void> {
     const raw = this.input.trim();
     this.input = "";
@@ -558,10 +759,15 @@ export class Tui {
     this.startSpinner();
     try {
       let reply: Line[] = [];
+      let spoken: string | null = null;
       await this.withLivePanel("Security mission", async () => {
-        reply = await this.chat.handle(raw);
+        const answer = await this.chat.ask(raw);
+        reply = answer.lines;
+        spoken = answer.spoken;
       });
       this.sayLines(reply);
+      // Only the model's own sentence is read aloud — never the rendered tables.
+      if (this.speakReplies && spoken) void speak(spoken);
     } catch (err) {
       this.say(`error: ${(err as Error).message}`, "err");
     } finally {
@@ -653,20 +859,36 @@ export class Tui {
 
     const menuLines = this.menuMatches.slice(0, 6);
     const menuHeight = menuLines.length > 0 ? menuLines.length + 1 : 0;
-    const inputBoxHeight = 3;
+
+    // While the microphone is open the bot takes the input box's place, in the
+    // same fixed spot, so the log above it stays put.
+    const botLines = this.voice
+      ? renderBot(this.voice.state, this.voice.frame, { label: this.voice.label, hint: this.voice.hint })
+      : [];
+    const inputBoxHeight = this.voice ? botLines.length : 3;
     const statusHeight = 1;
     const headerHeight = 1;
-    const viewport = rows - headerHeight - menuHeight - inputBoxHeight - statusHeight;
+    const viewport = Math.max(1, rows - headerHeight - menuHeight - inputBoxHeight - statusHeight);
 
-    // Header
+    // Header. The badge describes the agent actually in this workspace — the
+    // blanket "NO REAL DATA" was applied to commands operating on real imported
+    // agents, which is a claim the data does not support.
     const title = " AGENTGUARD X ";
-    const badge = " DEMO / SANDBOX / NO REAL DATA ";
+    const activeId = this.ctx.engine.getActiveAgentId();
+    const active = activeId ? this.ctx.engine.getAgent(activeId) : undefined;
+    const [badge, badgeColour] = !active
+      ? [" no agent registered ", "245"]
+      : isDemoAgent(active.id)
+        ? [" DEMO / SANDBOX / NO REAL DATA ", "179"]
+        : this.ctx.engine.hasRuntime(active.id)
+          ? [` ● ${active.name} · drivable `, "72"]
+          : [` ○ ${active.name} · audit only `, "179"];
     const headerFill = Math.max(0, inner - title.length - badge.length - 2);
     const header =
       " " +
       `\x1b[1;38;5;208m${title}${RESET}` +
       `\x1b[38;5;58m${"─".repeat(headerFill)}${RESET}` +
-      `\x1b[38;5;179m${badge}${RESET}`;
+      `\x1b[38;5;${badgeColour}m${badge}${RESET}`;
 
     // Viewport (log, wrapped to width)
     const wrapped: Line[] = [];
@@ -711,20 +933,22 @@ export class Tui {
     const boxMid = `\x1b[38;5;58m│${RESET} ${inputContent} \x1b[38;5;58m│${RESET}`;
     const boxBottom = `\x1b[38;5;58m╰${"─".repeat(inner)}╯${RESET}`;
 
+    // The bot takes the input box's region while voice is active, so it animates
+    // in place and the log above it never moves.
+    const bottom = this.voice ? botLines.map((l) => ` ${colourLine(l)}`) : [boxTop, boxMid, boxBottom];
+
     // Status
-    const hint = this.menuMatches.length > 0 ? "↑↓ select · Tab complete · Enter run" : "/ commands · Esc quit";
+    const hint = this.voice
+      ? this.voice.mode === "recording"
+        ? "Enter stop · Esc cancel"
+        : "working…"
+      : this.menuMatches.length > 0
+        ? "↑↓ select · Tab complete · Enter run"
+        : "/ commands · Ctrl-V voice · Esc quit";
     const statusLeft = ` ${this.status}`;
     const statusText = fit(`\x1b[38;5;245m${statusLeft}`, inner - hint.length - 2) + `\x1b[38;5;58m${hint}`;
 
-    const frame = [
-      fit(header, w),
-      ...padded,
-      ...menu,
-      boxTop,
-      boxMid,
-      boxBottom,
-      statusText,
-    ].join("\n");
+    const frame = [fit(header, w), ...padded, ...menu, ...bottom, statusText].join("\n");
 
     process.stdout.write(HOME + CLEAR + frame + RESET);
   }
@@ -736,6 +960,15 @@ export class Tui {
 
 function buildCommands(): SlashCommand[] {
   const commands: SlashCommand[] = [
+    {
+      name: "voice",
+      args: "[speak]",
+      description: "talk instead of typing (or press Ctrl-V) — `speak` also reads replies aloud",
+      run(arg, app) {
+        if (arg.trim() === "speak") app.toggleSpeak();
+        void app.startVoice();
+      },
+    },
     {
       name: "demo",
       args: "[scenario]",

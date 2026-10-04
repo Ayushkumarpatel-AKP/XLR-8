@@ -6,6 +6,8 @@ import { renderBot, type BotState } from "./bot.js";
 import {
   cleanup,
   detectVoice,
+  isUsableTranscript,
+  SILENCE_RMS,
   speak,
   transcribe,
   VoiceRecorder,
@@ -23,9 +25,6 @@ import type { ChatSession } from "./chat.js";
  * the only channel, and the spoken sentence is only ever the model's plain
  * summary, never the rendered tables underneath it.
  * ------------------------------------------------------------------ */
-
-/** Below this RMS a recording is treated as silence. */
-const SILENCE_RMS = 0.008;
 
 export interface VoiceCliOptions {
   session: ChatSession;
@@ -212,8 +211,11 @@ export async function runVoiceCli(opts: VoiceCliOptions): Promise<number> {
     cleanup(taken.path);
 
     stage.release();
-    if (!said) {
-      process.stdout.write(ansi.gray("  That came through empty — try again.\n"));
+    if (!isUsableTranscript(said)) {
+      // A speechless clip comes back as something plausible rather than nothing.
+      process.stdout.write(
+        ansi.gray(`  That came through as nothing usable${said ? ` (${JSON.stringify(said)})` : ""} — try again.\n`),
+      );
       continue;
     }
     process.stdout.write(`${ansi.gray("  you said:")} ${ansi.bold(said)}\n`);
