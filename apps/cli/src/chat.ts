@@ -13,6 +13,8 @@ import type { Line } from "./kind.js";
 import { missionRecap, missionSummary } from "./format.js";
 import { noAgentNotice, providerWarning, sandboxNotice } from "./support.js";
 import { failureReason, renderFailure, renderProviderWarning } from "./verify-view.js";
+import { buildAgentTools, type AgentTool } from "./tools.js";
+import { runAgentTurn } from "./agent-loop.js";
 
 /* ------------------------------------------------------------------ *
  * Natural-language layer.
@@ -337,6 +339,7 @@ export class ChatSession {
   private readonly history: ChatTurn[] = [];
   private lastMissionId: string | null = null;
   private cachedLedger: Ledger | null = null;
+  private agentToolCache: AgentTool[] | null = null;
 
   constructor(
     private readonly engine: AgentGuardEngine,
@@ -391,12 +394,59 @@ export class ChatSession {
     }
   }
 
+  /** The catalog the model drives. Built on first use — a session with no model never needs it. */
+  private agentTools(): AgentTool[] {
+    this.agentToolCache ??= buildAgentTools({
+      engine: this.engine,
+      lab: this.lab,
+      dataDir: this.dataDir ?? ".agentguard",
+    });
+    return this.agentToolCache;
+  }
+
+  /**
+   * One turn through the model. Null means "answer deterministically instead".
+   *
+   * The model decides WHAT to check; the tools do it and render the real output,
+   * which is shown beneath whatever the model says. So the conversation is
+   * human, and the numbers are still the engine's.
+   */
+  private async converse(input: string): Promise<Line[] | null> {
+    // A slash command is the user steering the tool directly — do not put a model
+    // in the way of it.
+    if (input.startsWith("/")) return null;
+
+    const turn = await runAgentTurn({
+      router: this.router,
+      tools: this.agentTools(),
+      history: this.history.slice(0, -1).map((h) => ({ role: h.role, text: h.text })),
+      input,
+    });
+    if (!turn) return null;
+
+    const out: Line[] = [];
+    if (turn.trace.length > 0) {
+      out.push({ text: "  checking…", kind: "dim" }, ...turn.trace, { text: "", kind: "dim" });
+    }
+    if (turn.text) out.push({ text: turn.text, kind: "accent" });
+    if (turn.lines.length > 0) out.push({ text: "", kind: "dim" }, ...turn.lines);
+    if (turn.error) out.push({ text: `  (the model call failed part-way: ${turn.error})`, kind: "warn" });
+
+    // Nothing usable came back — let the deterministic path answer instead.
+    return out.length > 0 ? out : null;
+  }
+
   /** Handle one user utterance and return the assistant's reply lines. */
   async handle(rawInput: string): Promise<Line[]> {
     const input = rawInput.trim();
     this.history.push({ role: "user", text: input });
-    const intent = classify(input);
-    const lines = await this.dispatch(input, intent);
+
+    // Prefer the model, which can work out what the user is asking for. The
+    // deterministic matcher stays as the fallback, so the CLI never depends on a
+    // provider being reachable.
+    const viaModel = await this.converse(input);
+    const lines = viaModel ?? (await this.dispatch(input, classify(input)));
+
     this.history.push({ role: "assistant", text: lines.map((l) => l.text).join("\n") });
     if (this.history.length > 24) this.history.splice(0, this.history.length - 24);
     return lines;

@@ -23,8 +23,11 @@ import {
   verifyReceiptSignature,
 } from "@agentguard/receipt";
 import { SARIF_SCHEMA, SARIF_VERSION, toSarif } from "@agentguard/sarif";
+import { createInterface } from "node:readline/promises";
 import { ansi, box, pad } from "./theme.js";
+import { colourLine } from "./kind.js";
 import { renderMission } from "./warroom.js";
+import { ChatSession } from "./chat.js";
 import { runTui, tuiSupported } from "./tui.js";
 import { bar, barChart, chips, compareRow, comparison, heading, justify, riskGauge, stackedBar, stars, table } from "./chart.js";
 import { demoSummary, missionOutcome, type DemoRow } from "./format.js";
@@ -1324,6 +1327,75 @@ mcp
     await serveMcpStdio({ name: "agentguard-x", version: "0.1.0" }, tools);
   });
 
+// ---- ask the co-pilot -----------------------------------------------------
+/*
+ * The conversational surface. The model works out which checks the user is
+ * asking for and calls the real commands through a tool catalog; every number
+ * shown underneath comes from the engine. With no tool-capable provider the
+ * same commands fall back to the deterministic matcher, so this still works.
+ */
+function makeSession(app: CliApp): ChatSession {
+  return new ChatSession(app.engine, app.lab, app.engine.router, app.dataDir);
+}
+
+function answeringWith(app: CliApp): string {
+  if (!app.engine.router.hasToolProvider()) {
+    return "the deterministic matcher — no tool-capable provider is configured";
+  }
+  const id = app.engine.router.statuses().find((s) => s.tools)?.id;
+  return `the ${id ?? "configured"} model, choosing the checks itself`;
+}
+
+program
+  .command("ask <question...>")
+  .description("ask about your agents in plain language — the model picks and runs the checks")
+  .action(async (questionParts: string[]) => {
+    const app = createCliApp();
+    const question = questionParts.join(" ").trim();
+    const lines = await makeSession(app).handle(question);
+    if (isJson()) {
+      process.stdout.write(
+        JSON.stringify({ question, reply: lines.map((l) => l.text), answeringWith: answeringWith(app) }, null, 2) + "\n",
+      );
+      return;
+    }
+    process.stdout.write("\n" + lines.map(colourLine).join("\n") + "\n");
+  });
+
+program
+  .command("chat")
+  .description("talk to the co-pilot — a REPL over the same loop the TUI uses")
+  .action(async () => {
+    const app = createCliApp();
+    const session = makeSession(app);
+
+    // Piped input: the whole of stdin is one question, so `echo "…" | agentguard chat` works.
+    if (!process.stdin.isTTY) {
+      const chunks: string[] = [];
+      for await (const chunk of process.stdin) chunks.push(String(chunk));
+      const question = chunks.join("").trim();
+      if (question && question !== "exit" && question !== "quit") {
+        process.stdout.write((await session.handle(question)).map(colourLine).join("\n") + "\n");
+      }
+      return;
+    }
+
+    process.stdout.write(
+      `${ansi.bold(ansi.orange("AGENTGUARD X"))} ${ansi.gray("· ask in plain language about your agents")}\n` +
+        ansi.gray(`  answering with ${answeringWith(app)}\n`),
+    );
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.setPrompt(ansi.orange("› "));
+    rl.prompt();
+    for await (const line of rl) {
+      const question = line.trim();
+      if (question === "exit" || question === "quit") break;
+      if (question) process.stdout.write("\n" + (await session.handle(question)).map(colourLine).join("\n") + "\n\n");
+      rl.prompt();
+    }
+    rl.close();
+  });
+
 // ---- interactive TUI ------------------------------------------------------
 program
   .command("tui")
@@ -1357,6 +1429,8 @@ if (
       // describe the same product. Every command in the tree is listed here —
       // the old list omitted six of its own.
       ansi.bold("OPERATIONS"),
+      '  agentguard ask "<question>"             ask in plain language — the model picks the checks',
+      "  agentguard chat                         the same, as a REPL",
       "  agentguard                              interactive War Room UI",
       "  agentguard mission start|status|list|replay <id>",
       "  agentguard swarm [missionId]            stage decisions + blackboard entries",

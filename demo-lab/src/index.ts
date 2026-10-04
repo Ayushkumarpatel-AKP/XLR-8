@@ -91,7 +91,10 @@ export function createDemoLab(engine: AgentGuardEngine, opts: DemoLabOptions = {
       : new ScriptedFallbackRuntime(manifest);
 
   const register = (): void => {
-    if (engine.getAgent(v1.id)) return;
+    // Check the RUNTIME, not just the agent. Persistence stores the manifest but
+    // not the runtime, so a sandbox agent reloaded from disk would otherwise stay
+    // registered and silently read as audit-only.
+    if (engine.getAgent(v1.id) && engine.hasRuntime(v1.id)) return;
     engine.registerAgent(v1, makeRuntime(v1, defaultProfile));
   };
   if (opts.register !== false) register();
