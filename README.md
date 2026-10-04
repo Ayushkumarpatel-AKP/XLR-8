@@ -37,7 +37,7 @@ driven by **one engine, one event stream, one database**.
 | --- | --- | --- |
 | 1 | **Tells you what an agent can do** — every tool, data store, payment rail and external API it can reach | Agent inventory + capability graph |
 | 2 | **Tells you when it changed** — a new tool appeared, an approval gate was removed, a permission widened | Permission Drift with “why did risk increase?” |
-| 3 | **Tests it** — 24 traps, incl. 4 misalignment traps the agent works alone, and a real attacker model that tries to talk secrets out of it live | Attack Scenarios + red-team transcript |
+| 3 | **Tests it** — 24 traps, incl. 4 misalignment traps the agent works alone, and a real attacker model that tries to talk secrets out of it live. The trap is picked for *this* agent, and the page says which agent it will really exercise before you run it | Attack Scenarios + red-team transcript |
 | 4 | **Proves it leaked** — an exact planted value, quoted, not a model's opinion | Findings with a cited line + a star rating it caps |
 | 5 | **Keeps proof** — every finding is backed by content-addressed evidence | Findings → click → evidence drawer with sha256 |
 | 6 | **Seals it** — a signed, portable receipt anyone can verify, that expires when the agent changes | Signed Receipts + a public `/verify` page |
@@ -140,16 +140,16 @@ _The left column is the agent under test, rendered as **its own product**. The r
 <tr>
 <td width="50%">
 
-**Audit-only agent (imported from GitHub)**
-<img src="docs/screenshots/03-war-room-audit-only.png" alt="Audit-only agent" width="100%" />
-<sub>Imported agents have no runtime, so AgentGuard audits their <b>declared surface</b> — it says so instead of faking a chat.</sub>
+**Agent Under Test — the agent rendered as its own product**
+<img src="docs/screenshots/03-agent-under-test.png" alt="Agent Under Test" width="100%" />
+<sub>Interactive agents get a real chat. Imported, audit-only agents get an honest panel instead: their declared tools and a static audit — never a fake conversation.</sub>
 
 </td>
 <td width="50%">
 
-**Agent Under Test — live exposure graph**
-<img src="docs/screenshots/04-agent-under-test.png" alt="Agent Under Test" width="100%" />
-<sub>Nodes pulse on real tool calls; click one to trace its path; the legend filters by impact.</sub>
+**Agent Inventory — every agent, its logo and its posture**
+<img src="docs/screenshots/04-agents.png" alt="Agent Inventory" width="100%" />
+<sub>Import a real agent from GitHub by <code>owner/repo</code>; it arrives with the owner's own avatar beside the letter fallback.</sub>
 
 </td>
 </tr>
@@ -162,7 +162,7 @@ _The left column is the agent under test, rendered as **its own product**. The r
 </td>
 <td width="50%">
 
-**Permission Drift — what changed and why risk moved**
+**Permission Drift — what changed and why exposure moved**
 <img src="docs/screenshots/06-permission-drift.png" alt="Permission Drift" width="100%" />
 
 </td>
@@ -170,45 +170,47 @@ _The left column is the agent under test, rendered as **its own product**. The r
 <tr>
 <td width="50%">
 
-**Trust & capability graph**
-<img src="docs/screenshots/07-trust-graph.png" alt="Trust Graph" width="100%" />
-
-</td>
-<td width="50%">
-
-**Blast radius simulator**
-<img src="docs/screenshots/08-blast-radius.png" alt="Blast Radius" width="100%" />
-
-</td>
-</tr>
-<tr>
-<td width="50%">
-
-**Threat Model — the real incidents behind the traps**
-<img src="docs/screenshots/12-threat-model.png" alt="Threat Model" width="100%" />
-<sub>Every claim carries a source link and a date the source actually states. Where a source publishes no severity, the page says it is our triage.</sub>
-
-</td>
-<td width="50%">
-
-**War Room — the live leak monitor mid-attack**
-<img src="docs/screenshots/13-leak-monitor.png" alt="Live leak monitor" width="100%" />
-<sub>The attacker's turn, the agent's exact reply, and <b>leaked canary: can_customer_email, can_customer_phone</b> flagged as it happens.</sub>
-
-</td>
-</tr>
-<tr>
-<td width="50%">
-
-**Settings — every tab is live**
-<img src="docs/screenshots/09-settings.png" alt="Settings" width="100%" />
+**Trust &amp; Capability — the graph, and what a compromise reaches**
+<img src="docs/screenshots/07-trust.png" alt="Trust & Capability" width="100%" />
+<sub>One page for both questions, because they read the same payload: what this agent can reach, and what a compromise of it would sweep up.</sub>
 
 </td>
 <td width="50%">
 
 **Signed Receipts — bound, never a bare percentage**
-<img src="docs/screenshots/10-receipts.png" alt="Signed Receipts" width="100%" />
-<sub>Each control reports trials, violations and a Clopper–Pearson 95% upper bound — plus what the receipt does <b>not</b> cover.</sub>
+<img src="docs/screenshots/08-receipts.png" alt="Signed Receipts" width="100%" />
+<sub>Every receipt the workspace ever issued, not just this session's. Each control reports trials, violations and a Clopper–Pearson 95% upper bound — plus what the receipt does <b>not</b> cover. The panel glows while the ledger still points at it.</sub>
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Replay — the run, event by event**
+<img src="docs/screenshots/10-replay.png" alt="Replay" width="100%" />
+<sub>Move the cursor and the findings on screen are only the ones that had happened by then — the state is recomputed, not replayed from a recording.</sub>
+
+</td>
+<td width="50%">
+
+**Threat Model — the real incidents behind the traps**
+<img src="docs/screenshots/11-threat-model.png" alt="Threat Model" width="100%" />
+<sub>Every claim carries a source link and a date the source actually states. Where a source publishes no severity, the page says it is our triage.</sub>
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**Reports — computed from stored mission data**
+<img src="docs/screenshots/12-reports.png" alt="Reports" width="100%" />
+
+</td>
+<td width="50%">
+
+**Providers — only a passing health check counts**
+<img src="docs/screenshots/13-providers.png" alt="Providers" width="100%" />
+<sub>A provider that was never checked is <b>not</b> the same as one that failed, and the page keeps the two apart.</sub>
 
 </td>
 </tr>
@@ -216,20 +218,20 @@ _The left column is the agent under test, rendered as **its own product**. The r
 <td width="50%">
 
 **Public verification — no sign-in, no trust in our server**
-<img src="docs/screenshots/11-verify.png" alt="Public receipt verification" width="100%" />
+<img src="docs/screenshots/09-verify.png" alt="Public receipt verification" width="100%" />
 <sub>The signature is checked in the visitor's browser against the key inside the receipt; freshness comes from the ledger, and a down ledger degrades to "unknown" rather than failing closed.</sub>
 
 </td>
 <td width="50%">
 
-**CLI War Room**
-<br/>
-<img src="docs/reference/mockup-war-room.png" alt="Reference mockup" width="100%" />
-<sub>The identical mission, in the terminal — see <a href="#cli">CLI</a> for real output.</sub>
+**Settings — every tab is live**
+<img src="docs/screenshots/14-settings.png" alt="Settings" width="100%" />
 
 </td>
 </tr>
 </table>
+
+<sub>Screenshots are captured from the running app by <code>pnpm screenshots</code>, against a real workspace — the leak shown is the sandbox agent actually leaking a planted value, not a drawing. Regenerate them after a UI change.</sub>
 
 ---
 
@@ -284,10 +286,11 @@ Requires **Node ≥ 20** and **pnpm**. No Docker needed.
 ## Verify it
 
 ```bash
-pnpm check            # typecheck + hardcoded-data guard + 212 tests
+pnpm check            # typecheck + hardcoded-data guard + 275 tests
 pnpm verify:receipt   # real model → real leak → signed receipt → 4 verification checks
 pnpm verify:api       # the same over HTTP, including supersession
 pnpm audit:routes     # walk every route in a headless browser and fail on a dead end
+pnpm screenshots      # recapture docs/screenshots from the running app
 ```
 
 `audit:routes` visits all fourteen routes with an **empty workspace** — the state nobody tries by
@@ -709,6 +712,31 @@ cartoon villain. The library is **24 traps**: leak and secret extraction, inject
 policy and actions, robustness, and four **misalignment** traps where the agent works a
 synthetic inbox on its own with no attacker model in the loop.
 
+### Which trap runs, and against which agent
+
+**The trap is chosen for the agent.** Every trap declares the tools it exercises, and the
+runner reads that: a trap that exercises tools this agent really has outranks one that
+declares no tools at all (a *model-level* trap — it attacks the model, so it applies to any
+agent). A trap whose tools the agent does **not** have is left out entirely, because running
+it would test something the agent cannot do and report the result as if it said something
+about this one.
+
+`GET /api/missions/plan` answers *what would this run do* — the trap, why it was picked, and
+the agent it will really hit — and `POST /api/missions/start` resolves the same way, so the
+answer cannot drift from the run. The Dashboard shows it as a **Trap plan** card before you
+click, and the whole ranked list is selectable.
+
+**And it says which agent it will hit.** Traps drive the built-in sandbox — the only agent
+they *can* drive — so selecting an imported, audit-only agent does not mean the trap runs
+against it. The plan states the truth in one sentence, naming both:
+
+> This run does not test **sparse-agent**: it exercises the built-in sandbox agent
+> **AcmeBank AI Assistant** instead.
+
+The CLI does the same (`agentguard mission start <agent>` prints *why this trap* and, when
+they differ, both agents), and `agentguard demo run` still sweeps the whole library — that is
+its job — but ordered by fit rather than starting from whatever sits first in it.
+
 **The War Room shows the agent under test live — whichever agent that is.** The left column
 is a preview of *the agent this mission ran against*: its real name, model, owner,
 environment, source and tools. Identity, colour, URL and capabilities all come from the
@@ -762,7 +790,14 @@ agentguard audit
 `--classify` asks the configured model to infer each operation's security semantics
 (FINANCIAL / pii / irreversible / approval-required) from its **own description**. The model
 only *labels* — the deterministic policy engine still makes every decision — and the
-provider/model is recorded on the manifest as provenance.
+provider/model is recorded on the manifest as provenance. The owner's avatar comes along too,
+so an imported agent is recognisable in the inventory rather than showing a letter.
+
+**An imported agent is audited, never driven** — it has no runtime, so `Run Security Mission`
+cannot aim a trap at it and falls to the sandbox instead. The Trap plan says so in one
+sentence naming both agents, rather than letting the run look like a test of your repository.
+Importing also **validates the manifest**: input is parsed through the schema, so a caller
+cannot register a tool that is missing a field and take a screen down with it.
 
 ```
 ✓ imported Accounts API (openapi)                       6 tools
@@ -900,6 +935,12 @@ docs/             architecture, security, threat model, demo, references
   verification; a test fails the build if any finding lacks evidence.
 - **Nothing silently reverts.** The active agent is shared and persisted; imported agents are
   audited, never called; unconfigured channels say so.
+- **A run says what it will do, and what it will hit.** The trap is chosen from the agent's own
+  capabilities, and a run that will exercise the sandbox says so in one sentence naming both
+  agents — rather than letting an imported agent's name sit over a test it never took part in.
+- **An old workspace is read forwards.** A manifest persisted before a field existed is parsed
+  back through the schema on load, so a workspace written by an earlier build behaves like one
+  written by this build; a manifest the schema cannot read is kept, not dropped.
 - **No fake data.** A static guard scans production source for fake metrics, hardcoded risk
   values, fake “connected” statuses and non-determinism.
 
