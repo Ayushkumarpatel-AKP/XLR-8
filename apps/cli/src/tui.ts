@@ -924,12 +924,25 @@ export class Tui {
       });
     }
 
-    // Input box
+    // Input box. The mic sits on the right of the box and a ghost hint sits in
+    // the field, so voice is something you can see rather than something you have
+    // to already know about.
     const prompt = "\x1b[1;38;5;208m>\x1b[0m ";
-    const visible = visibleLength(prompt) + this.input.length;
+    const ghost = this.input.length === 0 && !this.closed ? "type, or press Ctrl-V to speak" : "";
+    const visible = visibleLength(prompt) + this.input.length + ghost.length;
     const cursorBlock = this.closed ? "" : "\x1b[7m \x1b[27m";
-    const inputContent = prompt + this.input + cursorBlock + " ".repeat(Math.max(0, inner - 2 - visible - 1));
-    const boxTop = `\x1b[38;5;58m╭─ message ${"─".repeat(Math.max(0, inner - 10))}╮${RESET}`;
+    const inputContent =
+      prompt +
+      this.input +
+      (ghost ? `\x1b[38;5;240m${ghost}\x1b[0m` : "") +
+      cursorBlock +
+      " ".repeat(Math.max(0, inner - 2 - visible - 1));
+    const mic = " ● mic · Ctrl-V ";
+    const micFill = inner - 11 - mic.length;
+    const boxTop =
+      micFill >= 3
+        ? `\x1b[38;5;58m╭─ message ${"─".repeat(micFill)}\x1b[38;5;208m${mic}\x1b[38;5;58m─╮${RESET}`
+        : `\x1b[38;5;58m╭─ message ${"─".repeat(Math.max(0, inner - 10))}╮${RESET}`;
     const boxMid = `\x1b[38;5;58m│${RESET} ${inputContent} \x1b[38;5;58m│${RESET}`;
     const boxBottom = `\x1b[38;5;58m╰${"─".repeat(inner)}╯${RESET}`;
 
@@ -944,7 +957,7 @@ export class Tui {
         : "working…"
       : this.menuMatches.length > 0
         ? "↑↓ select · Tab complete · Enter run"
-        : "/ commands · Ctrl-V voice · Esc quit";
+        : "/ commands · Enter send · Esc quit";
     const statusLeft = ` ${this.status}`;
     const statusText = fit(`\x1b[38;5;245m${statusLeft}`, inner - hint.length - 2) + `\x1b[38;5;58m${hint}`;
 
