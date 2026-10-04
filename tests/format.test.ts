@@ -62,8 +62,14 @@ describe("demo summary", () => {
     const a = await lab.runScenario("approval-bypass");
     const b = await lab.runScenario("sensitive-data");
     const lines = demoSummary([
-      { scenario: "approval-bypass", status: missionOutcome(a), risk: a.risk!.score, delta: null, findings: "critical" },
-      { scenario: "sensitive-data", status: missionOutcome(b), risk: b.risk!.score, delta: b.risk!.score - a.risk!.score, findings: "high" },
+      { scenario: "approval-bypass", status: missionOutcome(a), exposure: a.risk!.score, delta: null, findings: "1 (critical)" },
+      {
+        scenario: "sensitive-data",
+        status: missionOutcome(b),
+        exposure: b.risk!.score,
+        delta: b.risk!.score - a.risk!.score,
+        findings: "1 (high)",
+      },
     ]);
     const text = lines.map((l) => l.text).join("\n");
 
@@ -71,7 +77,9 @@ describe("demo summary", () => {
     expect(text).toContain("scenario");
     expect(text).toContain("approval-bypass");
     expect(text).toMatch(/[▲▼]/); // a delta arrow is present
-    expect(text).toMatch(/risk trend\s+[▁▂▃▄▅▆▇█]/);
+    expect(text).toMatch(/exposure trend\s+[▁▂▃▄▅▆▇█]/);
     expect(text).toMatch(/min \d+ · max \d+ · avg \d+/);
+    // The exposure column must never stand without the finding count beside it.
+    expect(text).toMatch(/1 \(critical\)/);
   });
 });

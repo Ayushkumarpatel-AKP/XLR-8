@@ -3,6 +3,9 @@ import { ansi, box, pad, severityColor, stateGlyph } from "./theme.js";
 
 const MAX_EVENTS = 12;
 
+/** "0 findings" / "1 finding" — the counterweight to every exposure band. */
+const findingsLabel = (n: number): string => `${n} finding${n === 1 ? "" : "s"}`;
+
 function timeOf(iso: string): string {
   return iso.slice(11, 19);
 }
@@ -16,7 +19,9 @@ function eventLine(e: MissionEvent): string {
 
 export function renderMissionHeader(mission: Mission): string {
   const risk = mission.risk;
-  const riskStr = risk ? `${risk.score}/100 ${severityColor(risk.band)(risk.band.toUpperCase())}` : "n/a";
+  const riskStr = risk
+    ? `${risk.score}/100 ${severityColor(risk.band)(risk.band.toUpperCase())} · ${findingsLabel(mission.findings.length)}`
+    : `n/a · ${findingsLabel(mission.findings.length)}`;
   return [
     ansi.bold(ansi.orange("AGENTGUARD X")) + ansi.gray("  ·  AI AGENT SECURITY WAR ROOM"),
     ansi.gray("DEMO / SANDBOX / NO REAL DATA"),
@@ -25,7 +30,7 @@ export function renderMissionHeader(mission: Mission): string {
     `${ansi.bold("AGENT")}     ${mission.agentName}`,
     `${ansi.bold("SCENARIO")}  ${mission.scenarioId}`,
     `${ansi.bold("ENV")}       ${mission.environment}    ${ansi.bold("STATUS")} ${mission.status}`,
-    `${ansi.bold("RISK")}      ${riskStr}`,
+    `${ansi.bold("EXPOSURE")}  ${riskStr}`,
   ].join("\n");
 }
 
@@ -59,16 +64,20 @@ export function renderFindings(mission: Mission): string {
 }
 
 export function renderRisk(mission: Mission): string {
-  if (!mission.risk) return box("RISK", [ansi.gray("not computed")]);
+  if (!mission.risk) return box("CAPABILITY EXPOSURE", [ansi.gray("not computed")]);
   const r = mission.risk;
-  const barWidth = 40;
+  // The bar has to leave room for the score, the band and the finding count on
+  // the same line, or the box border overflows.
+  const barWidth = 30;
   const filled = Math.round((r.score / 100) * barWidth);
   const bar = severityColor(r.band)("█".repeat(filled)) + ansi.olive("░".repeat(barWidth - filled));
-  const lines = [`${bar}  ${ansi.bold(String(r.score) + "/100")}`];
+  const lines = [
+    `${bar}  ${ansi.bold(String(r.score) + "/100")} ${severityColor(r.band)(r.band.toUpperCase())} · ${findingsLabel(mission.findings.length)}`,
+  ];
   for (const f of r.factors) {
     lines.push(`${pad(f.label, 22)} ${ansi.orange("+" + f.contribution)}  ${ansi.gray(f.detail.slice(0, 34))}`);
   }
-  return box("RISK BREAKDOWN", lines);
+  return box("CAPABILITY EXPOSURE BREAKDOWN", lines);
 }
 
 export function renderMission(mission: Mission, width = 66): string {

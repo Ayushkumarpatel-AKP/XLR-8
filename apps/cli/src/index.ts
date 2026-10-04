@@ -19,11 +19,13 @@ import {
 import { ingestedToManifest, ingestFromGitHub, serveMcpStdio, type McpToolHandler } from "@agentguard/mcp";
 import {
   createFileLedger,
+  createFileReceiptStore,
   decodeReceipt,
   encodeReceipt,
   issueReceiptForMissions,
   verifyReceiptNode,
   verifyReceiptSignature,
+  type Receipt,
 } from "@agentguard/receipt";
 import { SARIF_SCHEMA, SARIF_VERSION, toSarif } from "@agentguard/sarif";
 import { createInterface } from "node:readline/promises";
@@ -659,7 +661,7 @@ missionList.action(() => {
     missions
       .map(
         (m) =>
-          `${ansi.cyan(m.id)} ${pad(m.scenarioId, 18)} ${pad(m.status, 10)} ${ansi.gray(`risk ${m.risk?.score ?? "-"}`)}`,
+          `${ansi.cyan(m.id)} ${pad(m.scenarioId, 18)} ${pad(m.status, 10)} ${ansi.gray(`capability exposure ${m.risk?.score ?? "-"} · ${m.findings.length} finding${m.findings.length === 1 ? "" : "s"}`)}`,
       )
       .join("\n") || ansi.gray("  No missions yet. Run one: agentguard test run data-extraction"),
   );
@@ -770,8 +772,8 @@ test
       "",
       ...renderJudge(result),
       "",
-      heading("risk"),
-      `  ${riskGauge(m.risk?.score ?? 0)}`,
+      heading("capability exposure"),
+      `  ${riskGauge(m.risk?.score ?? 0)}   ${ansi.gray(`${m.findings.length} finding${m.findings.length === 1 ? "" : "s"}`)}`,
       "",
       ansi.gray(`  seal this evidence:  agentguard receipt issue ${m.agentId}`),
     ];
@@ -781,7 +783,7 @@ test
 // ---- compare two missions -------------------------------------------------
 program
   .command("compare <a> <b>")
-  .description("compare two missions side by side (risk, findings, tools, evidence)")
+  .description("compare two missions side by side (capability exposure, findings, tools, evidence)")
   .action((a: string, b: string) => {
     const app = createCliApp();
     const ma = app.engine.getMission(a);
@@ -812,7 +814,11 @@ program
       ...comparison(side(ma, "A"), side(mb, "B"), 34),
       "",
       heading("B relative to A"),
-      compareRow("risk score", ma.risk?.score ?? 0, mb.risk?.score ?? 0, { labelWidth: 20, width: 16 }),
+      compareRow("capability exposure", ma.risk?.score ?? 0, mb.risk?.score ?? 0, {
+        labelWidth: 20,
+        width: 16,
+        suffix: `findings ${ma.findings.length} / ${mb.findings.length}`,
+      }),
       compareRow("findings", ma.findings.length, mb.findings.length, { labelWidth: 20, width: 16 }),
       compareRow("tool calls", ma.tests[0]?.toolRequests.length ?? 0, mb.tests[0]?.toolRequests.length ?? 0, {
         labelWidth: 20,
@@ -877,14 +883,14 @@ driftCmd
       ...(drift.changes.length === 0
         ? [ansi.green("  ✓ no posture change since the baseline")]
         : [
-            compareRow("changed capabilities", 0, drift.changedCapabilityCount, { labelWidth: 22, width: 16 }),
-            compareRow("risk delta", 0, drift.riskDelta, {
-              labelWidth: 22,
+            compareRow("changed capabilities", 0, drift.changedCapabilityCount, { labelWidth: 26, width: 16 }),
+            compareRow("capability exposure delta", 0, drift.riskDelta, {
+              labelWidth: 26,
               width: 16,
               suffix: drift.riskDelta > 0 ? "getting worse" : drift.riskDelta < 0 ? "improving" : "",
             }),
             "",
-            heading(`what raised risk (${rising.length})`),
+            heading(`what raised capability exposure (${rising.length})`),
             ...barChart(
               rising
                 .slice()
@@ -896,7 +902,7 @@ driftCmd
             ...(falling.length > 0
               ? [
                   "",
-                  heading(`what lowered risk (${falling.length})`),
+                  heading(`what lowered capability exposure (${falling.length})`),
                   ...barChart(
                     falling.map((c) => ({
                       label: `${c.kind} ${c.subject}`.slice(0, 40),
@@ -1090,9 +1096,13 @@ demo
       rows.push({
         scenario: m.scenarioId,
         status: missionOutcome(m),
-        risk,
+        exposure: risk,
         delta: prev === null ? null : risk - prev,
-        findings: m.findings.length ? m.findings.map((f) => f.severity).join(", ") : "none",
+        // The count leads, because the exposure column beside it must never be
+        // read as a verdict on its own — "high" is not a number of anything.
+        findings: m.findings.length
+          ? `${m.findings.length} (${m.findings.map((f) => f.severity).join(", ")})`
+          : "none",
       });
       prev = risk;
     }
@@ -1104,7 +1114,7 @@ demo
       ...missions.map(
         (m) =>
           `  ${ansi.green("✓")} ${pad(m.scenarioId, 18)} ${pad(m.tests[0]?.status ?? "-", 6)} ${ansi.gray(
-            `risk ${m.risk?.score ?? "-"}  findings ${m.findings.length}`,
+            `capability exposure ${m.risk?.score ?? "-"}  findings ${m.findings.length}`,
           )}`,
       ),
       ...demoSummary(rows).map((l) => paintLine(l.kind, l.text)),
@@ -1258,6 +1268,63 @@ receiptCmd
   .command("verify <payload>")
   .description("decode and verify a receipt (compact payload, JSON, or a file)")
   .action(verifyReceipt);
+
+/**
+ * A receipt is CURRENT only when the ledger's own current fingerprint equals it.
+ * When the ledger cannot be read, freshness is UNKNOWN — never guessed from the
+ * receipt's contents.
+ */
+function receiptFreshness(ledger: ReturnType<typeof createFileLedger>, r: Receipt): "CURRENT" | "SUPERSEDED" | "UNKNOWN" {
+  try {
+    const current = ledger.latest(r.identity);
+    return current && current.fingerprint === r.fingerprint ? "CURRENT" : "SUPERSEDED";
+  } catch {
+    return "UNKNOWN";
+  }
+}
+
+receiptCmd
+  .command("list [agentId]")
+  .description("list the stored receipts, newest first, and which fingerprint the ledger still points at")
+  .action((agentId?: string) => {
+    const app = createCliApp();
+    const store = createFileReceiptStore(join(app.dataDir, "receipts.jsonl"));
+    const receipts = agentId ? store.forAgent(agentId) : store.all();
+
+    if (receipts.length === 0) {
+      emit(
+        [],
+        [
+          heading("stored receipts (0)"),
+          "",
+          ansi.gray(agentId ? `  No receipts have been issued for ${agentId} yet.` : "  No receipts have been issued in this workspace yet."),
+          ansi.gray("  Issue one:  agentguard receipt issue <agentId>"),
+        ].join("\n"),
+      );
+      return;
+    }
+
+    const ledger = cliLedger(app);
+    const rows = receipts.map((r) => {
+      const status = receiptFreshness(ledger, r);
+      const tone = status === "CURRENT" ? ansi.green : status === "SUPERSEDED" ? ansi.yellow : ansi.gray;
+      return [
+        tone(status),
+        ansi.cyan(r.fingerprint.length > 34 ? r.fingerprint.slice(0, 34) + "…" : r.fingerprint),
+        `${r.agentName} ${ansi.gray(`(${r.agentId})`)}`,
+        stars(r.verdict.starRating),
+        new Date(r.issuedAt).toLocaleString(),
+      ];
+    });
+
+    const lines = [
+      heading(`stored receipts (${receipts.length})${agentId ? ` — ${agentId}` : ""}`),
+      ...table(["status", "fingerprint", "agent", "rating", "issued"], rows, ["l", "l", "l", "l", "l"]),
+      "",
+      ansi.gray("  CURRENT = the ledger still points at this fingerprint; anything else is SUPERSEDED."),
+    ];
+    emit(receipts, lines.join("\n"));
+  });
 
 // ---- freshness ledger -----------------------------------------------------
 program
@@ -1596,7 +1663,7 @@ if (
       "  agentguard trap list | trap show <id>",
       "  agentguard test run <scenario>          red-team transcript, disclosures, judge scorecard",
       "  agentguard findings | compare <a> <b> | report <missionId>",
-      "  agentguard receipt issue|verify         signed, portable receipts",
+      "  agentguard receipt issue|verify|list    signed, portable receipts",
       "  agentguard ledger [agentId]             CURRENT vs SUPERSEDED",
       "",
       ansi.bold("SECURITY"),

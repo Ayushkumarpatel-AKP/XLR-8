@@ -1,6 +1,9 @@
 import type { Mission } from "@agentguard/contracts";
 import type { Kind, Line } from "./kind.js";
 
+/** "0 findings" / "1 finding". The counterweight to every exposure band. */
+export const findingsLabel = (n: number): string => `${n} finding${n === 1 ? "" : "s"}`;
+
 const SEVERITY_TONE: Record<string, Kind> = {
   critical: "err",
   high: "warn",
@@ -17,9 +20,12 @@ export function missionSummary(m: Mission): Line[] {
     {},
   );
   const findingsText = Object.entries(counts).map(([k, v]) => `${k}:${v}`).join(" ") || "none";
+  const exposure = risk
+    ? `exposure ${risk.score}/100 ${risk.band.toUpperCase()} · ${findingsLabel(m.findings.length)}`
+    : `exposure n/a · ${findingsLabel(m.findings.length)}`;
   return [
     {
-      text: `  ${m.status}  ${m.scenarioId}  risk ${risk?.score ?? "-"}/100 (${risk?.band ?? "-"})  findings ${m.findings.length} [${findingsText}]`,
+      text: `  ${m.status}  ${m.scenarioId}  ${exposure}  [${findingsText}]`,
       kind: "info",
     },
     {
@@ -35,7 +41,10 @@ export function missionRecap(m: Mission): Line[] {
   const risk = m.risk;
   if (risk) {
     const deltaText = risk.delta > 0 ? ` (+${risk.delta})` : risk.delta < 0 ? ` (${risk.delta})` : "";
-    lines.push({ text: `  Risk is now ${risk.score}/100${deltaText} — ${risk.band}.`, kind: risk.band === "low" ? "ok" : "warn" });
+    lines.push({
+      text: `  Exposure is now ${risk.score}/100${deltaText} — ${risk.band} · ${findingsLabel(m.findings.length)}.`,
+      kind: risk.band === "low" ? "ok" : "warn",
+    });
   }
 
   if (m.findings.length === 0) {
@@ -86,9 +95,10 @@ export function sparkline(values: number[]): string {
 export interface DemoRow {
   scenario: string;
   status: string;
-  risk: number;
-  /** Risk change vs the previous scenario (null for the first row). */
+  exposure: number;
+  /** Exposure change vs the previous scenario (null for the first row). */
   delta: number | null;
+  /** Finding count and severities, e.g. "2 (critical, high)" — never a count alone. */
   findings: string;
 }
 
@@ -110,13 +120,13 @@ export function missionOutcome(m: Mission): "PASS" | "WARN" | "FAIL" {
 export function demoSummary(rows: DemoRow[]): Line[] {
   const lines: Line[] = [];
   const w = Math.max(14, ...rows.map((r) => r.scenario.length));
-  const divider = "  " + "─".repeat(w + 34);
+  const divider = "  " + "─".repeat(w + 38);
 
   lines.push({ text: "", kind: "info" });
   lines.push({ text: "  DEMO SUMMARY", kind: "title" });
   lines.push({ text: divider, kind: "dim" });
   lines.push({
-    text: `  ${"scenario".padEnd(w)}  ${"result".padEnd(6)} ${"risk".padStart(4)}  ${"trend".padEnd(7)} findings`,
+    text: `  ${"scenario".padEnd(w)}  ${"result".padEnd(6)} ${"exposure".padStart(8)}  ${"trend".padEnd(7)} findings`,
     kind: "dim",
   });
 
@@ -125,20 +135,20 @@ export function demoSummary(rows: DemoRow[]): Line[] {
       r.delta === null ? "    —  " : r.delta > 0 ? `+${r.delta} ▲`.padEnd(7) : r.delta < 0 ? `${r.delta} ▼`.padEnd(7) : "0  ·  ";
     const kind: Kind = r.status === "PASS" ? "ok" : r.status === "WARN" ? "warn" : "err";
     lines.push({
-      text: `  ${r.scenario.padEnd(w)}  ${r.status.padEnd(6)} ${String(r.risk).padStart(4)}  ${trend} ${r.findings}`,
+      text: `  ${r.scenario.padEnd(w)}  ${r.status.padEnd(6)} ${String(r.exposure).padStart(8)}  ${trend} ${r.findings}`,
       kind,
     });
   }
 
   lines.push({ text: divider, kind: "dim" });
 
-  const values = rows.map((r) => r.risk);
+  const values = rows.map((r) => r.exposure);
   if (values.length > 0) {
     const min = Math.min(...values);
     const max = Math.max(...values);
     const avg = Math.round(values.reduce((a, b) => a + b, 0) / values.length);
     lines.push({
-      text: `  risk trend   ${sparkline(values)}    min ${min} · max ${max} · avg ${avg}`,
+      text: `  exposure trend   ${sparkline(values)}    min ${min} · max ${max} · avg ${avg}`,
       kind: "accent",
     });
   }

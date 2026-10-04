@@ -320,6 +320,23 @@ export function createApiContext(): ApiContext {
   });
 
   /**
+   * Forget an agent. An import you cannot undo is a one-way door, and the only
+   * way out of one was to delete the whole workspace by hand.
+   *
+   * Missions already recorded keep the agent's denormalised name, so history
+   * stays readable — this unregisters, it does not rewrite the past. The open
+   * findings go with it, because a finding is about the agent it was found on.
+   * If it was the shared active agent, the pointer is cleared rather than left
+   * dangling on something that no longer exists.
+   */
+  app.delete("/api/agents/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!engine.getAgent(id)) return reply.code(404).send({ error: `unknown agent: ${id}` });
+    engine.removeAgent(id);
+    return { removed: id, agents: engine.listAgents().length };
+  });
+
+  /**
    * Set — or clear — how an agent is driven, plus the values its own sandbox
    * really holds. Storing a runtime is what turns an audited agent into one the
    * traps can run against, and it is the only way a runtime config enters the

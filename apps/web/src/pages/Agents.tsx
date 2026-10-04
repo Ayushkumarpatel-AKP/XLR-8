@@ -200,6 +200,7 @@ export function AgentsPage() {
                     </button>
                     <AuditButton agentId={a.id} />
                     <Link className="btn sm" to={`/agents/${a.id}`}>Inspect →</Link>
+                    <RemoveAgentButton agentId={a.id} name={a.name} />
                   </span>
                 </div>
                 {open && (
@@ -241,6 +242,48 @@ function AuditButton({ agentId }: { agentId: string }) {
       }}
     >
       {busy ? "Auditing…" : "Audit"}
+    </button>
+  );
+}
+
+/**
+ * Unregister an agent. Two clicks, because this is the one action on the page
+ * that a refresh does not undo — the second click is the confirmation, and it
+ * names what is about to happen rather than what just happened. Nothing is
+ * deleted from history: recorded missions keep the agent's name.
+ */
+function RemoveAgentButton({ agentId, name }: { agentId: string; name: string }) {
+  const { reload: reloadTargets } = useAgents();
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  return (
+    <button
+      className="btn sm danger"
+      disabled={busy}
+      title={error ?? (armed ? `Remove ${name} from this workspace` : "Remove this agent from the workspace")}
+      onClick={async () => {
+        if (!armed) {
+          setArmed(true);
+          setError(null);
+          return;
+        }
+        setBusy(true);
+        setError(null);
+        try {
+          await api.removeAgent(agentId);
+          reloadTargets();
+        } catch (e) {
+          setError((e as Error).message);
+          setArmed(false);
+        } finally {
+          setBusy(false);
+        }
+      }}
+      onBlur={() => setArmed(false)}
+    >
+      {busy ? "Removing…" : error ? "Remove failed" : armed ? "Remove — sure?" : "Remove"}
     </button>
   );
 }

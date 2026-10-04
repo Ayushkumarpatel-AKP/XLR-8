@@ -40,7 +40,7 @@ describe("interactive TUI (headless)", () => {
     const dump = tui.dump().join("\n");
     expect(dump).toContain("Approval Bypass");
     expect(dump).toContain("Financial action executed without human approval");
-    expect(dump).toMatch(/risk \d+\/100/);
+    expect(dump).toMatch(/exposure \d+\/100/);
   });
 
   it("shows drift, graph and blast radius", async () => {
@@ -72,7 +72,7 @@ describe("interactive TUI (headless)", () => {
     const tui = makeTui();
     await tui.execute("the agent shared customer data");
     await tui.execute("why did risk go up?");
-    expect(tui.dump().join("\n")).toContain("Risk for");
+    expect(tui.dump().join("\n")).toContain("Capability exposure for");
   });
 
   it("clears output via /clear", async () => {

@@ -164,7 +164,7 @@ function trapOutcome(mission: Mission): Record<string, unknown> {
     missionId: mission.id,
     status: test?.status ?? mission.status,
     scenarioId: mission.scenarioId,
-    risk: mission.risk?.score ?? null,
+    exposure: mission.risk?.score ?? null,
     passed: test ? test.status === "PASS" : false,
     findings: mission.findings.map((f) => ({
       severity: f.severity,
@@ -344,7 +344,7 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
     {
       name: "audit_agent",
       description:
-        "Run a STATIC security audit of an agent's declared surface: policy posture, reachability and risk. This executes NOTHING — no tool is invoked and no model is called. Never describe it as having run or tested the agent's tools. Use it to assess an agent safely.",
+        "Run a STATIC security audit of an agent's declared surface: policy posture, reachability and capability exposure. The exposure score measures what the surface CAN DO — it is not a verdict on the agent or its vendor, and it is not the same thing as a finding. This executes NOTHING — no tool is invoked and no model is called. Never describe it as having run or tested the agent's tools. Use it to assess an agent safely.",
       parameters: {
         type: "object",
         properties: { agentId: { type: "string", description: "Agent to audit. Defaults to the active agent." } },
@@ -365,7 +365,7 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
             missionId: mission.id,
             agentId: manifest.id,
             findings: mission.findings.length,
-            risk: mission.risk?.score ?? null,
+            exposure: mission.risk?.score ?? null,
             tools: manifest.tools.length,
           },
           lines: rendered(renderMission(mission)),
@@ -496,7 +496,7 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
     {
       name: "check_drift",
       description:
-        "Compare an agent's current posture against its stored baseline and report what changed: added or removed tools, widened scopes, new external destinations, and the risk delta. Use when the user asks what changed, or whether the agent drifted from its baseline.",
+        "Compare an agent's current posture against its stored baseline and report what changed: added or removed tools, widened scopes, new external destinations, and the capability-exposure delta. Use when the user asks what changed, or whether the agent drifted from its baseline.",
       parameters: {
         type: "object",
         properties: { agentId: { type: "string", description: "Agent to check. Defaults to the active agent." } },
@@ -533,14 +533,14 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
           lines.push(
             ...rendered([compareRow("changed capabilities", 0, drift.changedCapabilityCount, { labelWidth: 22, width: 16 })]),
             ...rendered([
-              compareRow("risk delta", 0, drift.riskDelta, {
+              compareRow("exposure delta", 0, drift.riskDelta, {
                 labelWidth: 22,
                 width: 16,
                 suffix: drift.riskDelta > 0 ? "getting worse" : drift.riskDelta < 0 ? "improving" : "",
               }),
             ]),
             line(""),
-            title(`what raised risk (${rising.length})`),
+            title(`what raised exposure (${rising.length})`),
             ...rendered(
               barChart(
                 rising
@@ -559,7 +559,7 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
           if (falling.length > 0) {
             lines.push(
               line(""),
-              title(`what lowered risk (${falling.length})`),
+              title(`what lowered exposure (${falling.length})`),
               ...rendered(
                 barChart(
                   falling.map((c) => ({
@@ -756,7 +756,7 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
         interface TrapRow {
           trapId: string;
           status: string;
-          risk: number | null;
+          exposure: number | null;
           disclosures: number;
           findingCount: number;
           failure: string | null;
@@ -770,7 +770,7 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
         for (const trapId of trapIds) {
           if (!trapById(trapId)) {
             failed++;
-            results.push({ trapId, status: "UNKNOWN", risk: null, disclosures: 0, findingCount: 0, failure: `unknown trap: ${trapId}` });
+            results.push({ trapId, status: "UNKNOWN", exposure: null, disclosures: 0, findingCount: 0, failure: `unknown trap: ${trapId}` });
             continue;
           }
           try {
@@ -783,7 +783,7 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
               results.push({
                 trapId,
                 status: "FAILED",
-                risk: m.risk?.score ?? null,
+                exposure: m.risk?.score ?? null,
                 disclosures: disc,
                 findingCount: m.findings.length,
                 failure: failureReason(m) ?? "the run failed before it tested anything",
@@ -794,7 +794,7 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
               results.push({
                 trapId,
                 status: test.status,
-                risk: m.risk?.score ?? null,
+                exposure: m.risk?.score ?? null,
                 disclosures: disc,
                 findingCount: m.findings.length,
                 failure: null,
@@ -806,7 +806,7 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
             results.push({
               trapId,
               status: "FAILED",
-              risk: f?.risk?.score ?? null,
+              exposure: f?.risk?.score ?? null,
               disclosures: 0,
               findingCount: f?.findings.length ?? 0,
               failure: f ? failureReason(f) : messageOf(err),
@@ -823,13 +823,13 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
             : r.status === "FAILED" || r.status === "UNKNOWN"
               ? ansi.red(r.status)
               : ansi.yellow(r.status),
-          String(r.risk ?? "—"),
+          String(r.exposure ?? "—"),
           String(r.disclosures),
           String(r.findingCount),
         ]);
         const lines: Line[] = [
           title(`traps run (${results.length})`),
-          ...rendered(table(["trap", "status", "risk", "disclosures", "findings"], rows, ["l", "l", "r", "r", "r"])),
+          ...rendered(table(["trap", "status", "exposure", "disclosures", "findings"], rows, ["l", "l", "r", "r", "r"])),
           line(""),
           line(
             `  ${totalDisclosures} proven disclosure(s) across ${results.length} trap(s) — ${leaked} leaked, ${clean} clean, ${failed} failed.`,
@@ -845,7 +845,7 @@ export function buildAgentTools(deps: AgentToolDeps): AgentTool[] {
     {
       name: "get_mission",
       description:
-        "Load a mission by id, or the newest mission if none is given: its status, risk, findings and — for a failed run — why it failed. Use to explain a specific run or to reopen the last result.",
+        "Load a mission by id, or the newest mission if none is given: its status, capability exposure, findings and — for a failed run — why it failed. Report exposure and findings together; a band on its own reads as a verdict on the agent rather than a measure of what its surface can do. Use to explain a specific run or to reopen the last result.",
       parameters: {
         type: "object",
         properties: { missionId: { type: "string", description: "Mission id. Defaults to the newest mission." } },

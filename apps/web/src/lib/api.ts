@@ -204,6 +204,12 @@ export const api = {
   agents: () => request<AgentManifest[]>("/agents"),
   agent: (id: string) =>
     request<{ agent: AgentManifest; interactive: boolean; risk: Mission["risk"]; findings: Finding[] }>(`/agents/${id}`),
+  /**
+   * Unregister an agent. Missions already recorded keep its name, so history
+   * stays readable; this forgets the registration, not the past.
+   */
+  removeAgent: (id: string) =>
+    request<{ removed: string; agents: number }>(`/agents/${encodeURIComponent(id)}`, { method: "DELETE" }),
   tools: () => request<AgentManifest["tools"]>("/tools"),
   missions: () => request<Mission[]>("/missions"),
   mission: (id: string) => request<Mission>(`/missions/${id}`),

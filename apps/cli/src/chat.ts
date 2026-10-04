@@ -10,7 +10,7 @@ import {
   type Ledger,
 } from "@agentguard/receipt";
 import type { Line } from "./kind.js";
-import { missionRecap, missionSummary } from "./format.js";
+import { findingsLabel, missionRecap, missionSummary } from "./format.js";
 import { noAgentNotice, providerWarning, sandboxNotice } from "./support.js";
 import { failureReason, renderFailure, renderProviderWarning } from "./verify-view.js";
 import { buildAgentTools, type AgentTool } from "./tools.js";
@@ -252,7 +252,7 @@ const SCENARIO_KEYWORDS: Record<ScenarioKey, string[]> = {
 };
 
 const META_KEYWORDS: Array<{ intent: IntentKind; words: string[] }> = [
-  { intent: "explain-risk", words: ["why", "risk score", "risk", "went up", "increased", "increase", "explain", "reason"] },
+  { intent: "explain-risk", words: ["why", "risk score", "risk", "exposure", "exposure score", "went up", "increased", "increase", "explain", "reason"] },
   { intent: "disclosures", words: ["disclosure", "disclosures", "what did it say", "did it leak anything", "leak anything", "canary", "canaries", "planted", "escape"] },
   { intent: "judge", words: ["score", "scorecard", "rating", "stars", "judge", "how did it do", "how bad"] },
   { intent: "receipt", words: ["receipt", "receipts", "seal", "signed", "issue a receipt", "verifiable"] },
@@ -601,7 +601,7 @@ export class ChatSession {
     lines.push({ text: "", kind: "info" });
     lines.push(...missionRecap(mission));
     lines.push({ text: "", kind: "info" });
-    lines.push({ text: "Ask me why the risk moved, or type /findings or /report to go deeper.", kind: "dim" });
+    lines.push({ text: "Ask me why the exposure moved, or type /findings or /report to go deeper.", kind: "dim" });
     return lines;
   }
 
@@ -609,7 +609,12 @@ export class ChatSession {
     const m = this.lastMission;
     if (!m?.risk) return [{ text: "No mission has run yet — try “check the refund for approval” or /demo.", kind: "dim" }];
     const lines: Line[] = [
-      { text: `Risk for ${m.scenarioId} is ${m.risk.score}/100 (${m.risk.band}).`, kind: "info" },
+      {
+        // The band never travels alone: on its own it reads as a verdict on the
+        // agent rather than a measure of what its surface can do.
+        text: `Capability exposure for ${m.scenarioId} is ${m.risk.score}/100 (${m.risk.band}) · ${findingsLabel(m.findings.length)}.`,
+        kind: "info",
+      },
     ];
     for (const f of m.risk.factors) {
       lines.push({ text: `  +${String(f.contribution).padStart(2)}  ${f.label}${f.detail ? ` — ${f.detail}` : ""}`, kind: "dim" });
@@ -830,7 +835,7 @@ export class ChatSession {
         ? this.engine.checkDrift(agentId, this.lab.driftManifest, this.lab.manifest)
         : this.engine.checkDrift(agentId);
     const lines: Line[] = [
-      { text: `Posture drift: ${drift.changedCapabilityCount} change(s), risk delta ${drift.riskDelta > 0 ? "+" : ""}${drift.riskDelta}.`, kind: "warn" },
+      { text: `Posture drift: ${drift.changedCapabilityCount} change(s), exposure delta ${drift.riskDelta > 0 ? "+" : ""}${drift.riskDelta}.`, kind: "warn" },
     ];
     for (const c of drift.changes) {
       lines.push({ text: `  ${c.riskDelta > 0 ? "+" : "-"} ${c.kind} — ${c.detail}`, kind: c.riskDelta > 0 ? "warn" : "dim" });

@@ -59,16 +59,25 @@ describe("chat session", () => {
     const text = lines.map((l) => l.text).join("\n");
     expect(text).toContain("Approval Bypass");
     expect(text).toContain("Financial action executed without human approval");
-    expect(text).toMatch(/Risk is now \d+\/100/);
+    expect(text).toMatch(/Exposure is now \d+\/100/);
   });
 
-  it("answers 'why did risk go up' from real risk factors", async () => {
+  it("answers 'why did exposure go up' from the real exposure factors", async () => {
+    const chat = makeChat();
+    await chat.handle("the agent shared customer data");
+    const lines = await chat.handle("why did exposure go up?");
+    const text = lines.map((l) => l.text).join("\n");
+    expect(text).toContain("Capability exposure for");
+    expect(text).toContain("Open findings");
+    // The band never travels alone — it carries the finding count beside it.
+    expect(text).toMatch(/Capability exposure for .+ · \d+ finding/);
+  });
+
+  it("still understands the word 'risk' — the older phrasing must not stop working", async () => {
     const chat = makeChat();
     await chat.handle("the agent shared customer data");
     const lines = await chat.handle("why did risk go up?");
-    const text = lines.map((l) => l.text).join("\n");
-    expect(text).toContain("Risk for");
-    expect(text).toContain("Open findings");
+    expect(lines.map((l) => l.text).join("\n")).toContain("Capability exposure for");
   });
 
   it("shows evidence attached to the last mission", async () => {

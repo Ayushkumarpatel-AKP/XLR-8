@@ -1335,9 +1335,11 @@ function buildCommands(): SlashCommand[] {
           rows.push({
             scenario: id,
             status: missionOutcome(m),
-            risk,
+            exposure: risk,
             delta: prevRisk === null ? null : risk - prevRisk,
-            findings: m.findings.length ? m.findings.map((f) => f.severity).join(", ") : "none",
+            findings: m.findings.length
+              ? `${m.findings.length} (${m.findings.map((f) => f.severity).join(", ")})`
+              : "none",
           });
           prevRisk = risk;
           findingCount += m.findings.length;
