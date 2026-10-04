@@ -32,10 +32,22 @@ export interface DemoLabOptions {
   runtime?: "auto" | RuntimeMode;
   /** Which operating brief the agent under test runs with. Defaults to "hardened". */
   profile?: AgentProfile;
+  /**
+   * Register the sandbox agent on the engine. Defaults to true.
+   *
+   * The API and the CLI both make the sandbox opt-in (`AGENTGUARD_DEMO=1`) so a
+   * fresh workspace really is empty. Pass false to build the lab without
+   * registering anything, then call `register()` if the agent is actually needed.
+   */
+  register?: boolean;
 }
 
 export interface DemoLab {
   agentId: string;
+  /** Register the sandbox agent on the engine. Idempotent. */
+  register(): void;
+  /** Whether the sandbox agent is currently registered. */
+  isRegistered(): boolean;
   /** Which runtime is actually driving the agent under test. */
   runtimeMode: RuntimeMode;
   /** v1: the baseline manifest. */
@@ -78,10 +90,16 @@ export function createDemoLab(engine: AgentGuardEngine, opts: DemoLabOptions = {
         )
       : new ScriptedFallbackRuntime(manifest);
 
-  engine.registerAgent(v1, makeRuntime(v1, defaultProfile));
+  const register = (): void => {
+    if (engine.getAgent(v1.id)) return;
+    engine.registerAgent(v1, makeRuntime(v1, defaultProfile));
+  };
+  if (opts.register !== false) register();
 
   return {
     agentId: v1.id,
+    register,
+    isRegistered: () => Boolean(engine.getAgent(v1.id)),
     runtimeMode,
     manifest: v1,
     driftManifest: v2,

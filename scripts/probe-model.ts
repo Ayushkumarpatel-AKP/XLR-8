@@ -11,7 +11,7 @@ loadDotEnv();
 async function main(): Promise<void> {
   const cfg = loadProviderConfig();
   if (!cfg.groqApiKey) {
-    console.log("GROQ_API_KEY not set");
+    console.log("No tool-capable model provider is configured. Set GROQ_API_KEY, or add one on the Providers page.");
     return;
   }
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {

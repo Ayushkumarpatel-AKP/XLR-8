@@ -4,7 +4,15 @@ import { Command } from "commander";
 import type { AgentManifest, Mission } from "@agentguard/contracts";
 import { nowIso } from "@agentguard/contracts";
 import { AgentGuardEngine, AUDIT_SCENARIO, classifyTools } from "@agentguard/core";
-import { SCENARIO_IDS, SCENARIOS, createDemoLab, listScenarios, type DemoLab, type ScenarioKey } from "@agentguard/demo-lab";
+import {
+  SCENARIO_IDS,
+  SCENARIOS,
+  createDemoLab,
+  demoAgentId,
+  listScenarios,
+  type DemoLab,
+  type ScenarioKey,
+} from "@agentguard/demo-lab";
 import { ingestedToManifest, ingestFromGitHub, serveMcpStdio, type McpToolHandler } from "@agentguard/mcp";
 import {
   createFileLedger,
@@ -23,9 +31,11 @@ import { demoSummary, missionOutcome, type DemoRow } from "./format.js";
 import { graphLegend, renderGraphLines } from "./graph-render.js";
 import {
   renderDisclosures,
+  renderFailure,
   renderJudge,
   renderLedger,
   renderPrGate,
+  renderProviderWarning,
   renderReceipt,
   renderRedTeam,
   renderSarif,
@@ -33,6 +43,7 @@ import {
   renderTrap,
   renderTrapLibrary,
 } from "./verify-view.js";
+import { demoEnabled, noAgentNotice, providerWarning, sandboxNotice } from "./support.js";
 
 const SEV_COLOR: Record<string, (s: string) => string> = {
   critical: ansi.red,
@@ -68,13 +79,40 @@ interface CliApp {
   engine: AgentGuardEngine;
   lab: DemoLab;
   dataDir: string;
+  /** True when the built-in sandbox agent is in this workspace. */
+  demo: boolean;
 }
 
 function createCliApp(): CliApp {
   const dataDir = process.env.AGENTGUARD_DATA_DIR ?? ".agentguard";
+  const demo = demoEnabled();
   const engine = new AgentGuardEngine({ dataDir });
-  const lab = createDemoLab(engine);
-  return { engine, lab, dataDir };
+  // The sandbox agent is opt-in, exactly as in the API. Registering it into every
+  // CLI process is why this surface could never reach an empty workspace: every
+  // command silently acted on a fixture the user never imported.
+  const lab = createDemoLab(engine, { register: demo });
+  if (!demo && engine.getAgent(demoAgentId())) engine.removeAgent(demoAgentId());
+  return { engine, lab, dataDir, demo };
+}
+
+/**
+ * A trap needs the sandbox agent to exist. Returns false (and says why) when it
+ * does not, so no command ever runs against an agent the user does not have.
+ */
+function requireSandbox(app: CliApp): boolean {
+  if (app.lab.isRegistered()) return true;
+  process.stderr.write(sandboxNotice() + "\n");
+  process.exitCode = 1;
+  return false;
+}
+
+/**
+ * Say upfront when a run cannot work. The web app warns before the click; the CLI
+ * used to start anyway and fail with nothing to show for it. Non-blocking.
+ */
+async function warnIfNoProvider(app: CliApp): Promise<void> {
+  const warning = await providerWarning(app.engine);
+  if (warning && !isJson()) process.stdout.write(renderProviderWarning(warning).join("\n") + "\n");
 }
 
 /**
@@ -88,9 +126,7 @@ function resolveAgent(app: CliApp, explicit?: string): AgentManifest | undefined
 }
 
 function noAgent(): void {
-  process.stderr.write(
-    "No agent selected. Pick one with `pnpm ag agent use <id>`, pass an id, or import one with `pnpm ag agent import <repo>`.\n",
-  );
+  process.stderr.write(noAgentNotice() + "\n");
   process.exitCode = 1;
 }
 
@@ -128,18 +164,44 @@ function makeLiveRenderer(engine: AgentGuardEngine, missionId: () => string | nu
   return { render, stop: unsubscribe };
 }
 
-async function runScenarioLive(app: CliApp, scenarioId: ScenarioKey, follow: boolean): Promise<Mission> {
+/** The most recent failed mission — where the reason for the failure lives. */
+function newestFailed(engine: AgentGuardEngine, scenarioId?: string): Mission | undefined {
+  return engine
+    .listMissions()
+    .filter((m) => m.status === "failed" && (!scenarioId || m.scenarioId === scenarioId))
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))[0];
+}
+
+async function runScenarioLive(app: CliApp, scenarioId: ScenarioKey, follow: boolean): Promise<Mission | null> {
+  if (!requireSandbox(app)) return null;
+  await warnIfNoProvider(app);
+
   let currentId: string | null = null;
   const live = follow ? makeLiveRenderer(app.engine, () => currentId) : null;
   const scenario = SCENARIOS[scenarioId];
   process.stdout.write(
     `${ansi.orange("▶")} Running scenario ${ansi.bold(scenario.title)} against ${ansi.bold(app.lab.manifest.name)}\n`,
   );
-  const mission = await app.lab.runScenario(scenarioId);
-  currentId = mission.id;
-  live?.stop();
-  if (follow) live?.render();
-  return mission;
+
+  try {
+    const mission = await app.lab.runScenario(scenarioId);
+    currentId = mission.id;
+    live?.stop();
+    if (follow) live?.render();
+    return mission;
+  } catch (err) {
+    // The engine has already marked the mission failed and rethrown. Lead with
+    // WHY, the way the web War Room does, rather than exiting with no reason.
+    live?.stop();
+    const failed = newestFailed(app.engine, scenarioId);
+    if (failed && !isJson()) {
+      process.stdout.write("\n" + renderFailure(failed).join("\n") + "\n");
+    } else {
+      process.stderr.write(`${(err as Error).message}\n`);
+    }
+    process.exitCode = 1;
+    return null;
+  }
 }
 
 const program = new Command();
@@ -163,14 +225,20 @@ program
   .action(() => {
     const app = createCliApp();
     mkdirSync(app.dataDir, { recursive: true });
+    const agents = app.engine.listAgents();
     emit(
-      { dataDir: app.dataDir, ok: true },
+      { dataDir: app.dataDir, ok: true, agents: agents.length },
       [
         ansi.bold(ansi.orange("AGENTGUARD X")) + ansi.gray("  ·  workspace initialised"),
         `${ansi.green("✓")} data directory: ${app.dataDir}`,
-        `${ansi.green("✓")} demo agent registered: ${app.lab.manifest.name} (${app.lab.manifest.tools.length} tools)`,
+        // The workspace starts empty on purpose — importing a fixture and calling
+        // it "registered" is what made every command act on an agent nobody chose.
+        agents.length > 0
+          ? `${ansi.green("✓")} ${agents.length} agent(s) registered: ${agents.map((a) => a.name).join(", ")}`
+          : ansi.gray("· no agent registered — the workspace starts empty"),
         "",
-        ansi.gray("Next: ") + "agentguard doctor   ·   agentguard demo run",
+        ansi.gray("Next: ") + "agentguard agent import <owner/repo>   ·   agentguard doctor",
+        ansi.gray("      sandbox agent (traps to run against):  AGENTGUARD_DEMO=1 agentguard demo run"),
       ].join("\n"),
     );
   });
@@ -182,6 +250,7 @@ program
   .action(async () => {
     const app = createCliApp();
     const providers = await app.engine.router.checkHealth();
+    const verdict = await providerWarning(app.engine);
     const integrity = app.engine.evidence.verifyIntegrity();
     const active = resolveAgent(app);
     const agents = app.engine.listAgents();
@@ -211,12 +280,18 @@ program
       `${pad("Evidence", 14)}${integrity.checked} records, ${integrity.ok ? ansi.green("integrity OK") : ansi.red("INTEGRITY FAILED")}`,
       "",
       ansi.bold("MODEL PROVIDERS"),
+      // "Never checked" and "check failed" are different states — collapsing them
+      // is what made an untouched provider look broken.
       ...providers.map(
         (p) =>
-          `${pad(p.id, 20)}${p.health?.ok ? ansi.green("✓ connected") : ansi.gray("○ not connected")}  ${ansi.gray(
-            `${p.tools ? "[tools] " : ""}${p.model}`,
-          )}`,
+          `${pad(p.id, 20)}${
+            p.health ? (p.health.ok ? ansi.green("✓ connected") : ansi.red("○ check failed")) : ansi.gray("○ not checked")
+          }  ${ansi.gray(`${p.tools ? "[tools] " : ""}${p.model}`)}`,
       ),
+      ...(verdict
+        ? ["", ...verdict.split("\n").map((l, i) => ansi.yellow(i === 0 ? `  ▲ ${l}` : `    ${l}`))]
+        : []),
+      "",
       ansi.gray("No secret values are ever printed."),
     ];
     emit(report, lines.join("\n"));
@@ -240,12 +315,17 @@ agent
       app.engine.hasRuntime(a.id) ? ansi.green("● live") : ansi.gray("○ audit-only"),
     ]);
     const payload = { activeAgentId: activeId, agents: agents.map((a) => ({ ...a, interactive: app.engine.hasRuntime(a.id) })) };
-    emit(payload, [
-      heading(`agents (${agents.length})`),
-      ansi.gray(`  ▸ = the active agent (shared with the web app)`),
-      "",
-      ...table(["", "agent", "name", "tools", "model", "mode"], rows, ["l", "l", "l", "r", "l", "l"]),
-    ].join("\n"));
+    emit(
+      payload,
+      agents.length === 0
+        ? [heading("agents (0)"), "", ...noAgentNotice().split("\n").map((l) => ansi.gray(`  ${l}`))].join("\n")
+        : [
+            heading(`agents (${agents.length})`),
+            ansi.gray(`  ▸ = the active agent (shared with the web app)`),
+            "",
+            ...table(["", "agent", "name", "tools", "model", "mode"], rows, ["l", "l", "l", "r", "l", "l"]),
+          ].join("\n"),
+    );
   });
 
 agent
@@ -466,7 +546,7 @@ mission
       return;
     }
     const m = await runScenarioLive(app, opts.scenario, Boolean(opts.follow));
-    emit(m, renderMission(m));
+    if (m) emit(m, renderMission(m));
   });
 
 mission
@@ -480,7 +560,10 @@ mission
       process.exitCode = 1;
       return;
     }
-    emit(m, renderMission(m));
+    // A failed mission leads with the reason, not with a console of partial
+    // events and a findings list that reads "posture within policy".
+    const why = renderFailure(m);
+    emit(m, [...(why.length ? [...why, ""] : []), renderMission(m)].join("\n"));
   });
 
 const missionList = mission.command("list").description("list missions");
@@ -494,7 +577,7 @@ missionList.action(() => {
         (m) =>
           `${ansi.cyan(m.id)} ${pad(m.scenarioId, 18)} ${pad(m.status, 10)} ${ansi.gray(`risk ${m.risk?.score ?? "-"}`)}`,
       )
-      .join("\n") || ansi.gray("No missions yet. Run: agentguard demo run"),
+      .join("\n") || ansi.gray("  No missions yet. Run one: agentguard test run data-extraction"),
   );
 });
 
@@ -530,9 +613,23 @@ test
   .option("--profile <profile>", "which brief the agent under test runs: hardened | weak", "hardened")
   .action(async (suite: ScenarioKey | undefined, opts: { profile?: string }) => {
     const app = createCliApp();
+    if (!requireSandbox(app)) return;
     const id = suite && SCENARIO_IDS.includes(suite) ? suite : "approval-bypass";
     const profile = opts.profile === "weak" ? "weak" : "hardened";
-    const m = await app.lab.runScenario(id, profile);
+    await warnIfNoProvider(app);
+
+    let m: Mission;
+    try {
+      m = await app.lab.runScenario(id, profile);
+    } catch (err) {
+      // The engine already marked the mission failed and rethrown. Lead with WHY,
+      // the way the web War Room does, instead of exiting with a bare error.
+      const failed = newestFailed(app.engine, id);
+      if (failed) emit({ missionId: failed.id, result: null }, renderFailure(failed).join("\n"));
+      else process.stderr.write(`${(err as Error).message}\n`);
+      process.exitCode = 1;
+      return;
+    }
     const result = m.tests[0] ?? null;
     if (!result) {
       emit({ missionId: m.id, result: null }, ansi.gray("no result"));
@@ -728,11 +825,12 @@ driftCmd.action(() => {
   driftCmd.outputHelp();
 });
 
-// ---- graph / blast radius -------------------------------------------------
+// ---- trust & capability (graph + simulated impact) -------------------------
 program
-  .command("graph [agentId]")
-  .description("draw the capability/trust graph")
-  .action((agentId?: string) => {
+  .command("trust [agentId]")
+  .description("capability graph + simulated impact for one agent")
+  .option("--no-simulate", "graph only, without the reachability simulation")
+  .action((agentId: string | undefined, opts: { simulate: boolean }) => {
     const app = createCliApp();
     const manifest = resolveAgent(app, agentId);
     if (!manifest) return noAgent();
@@ -742,29 +840,21 @@ program
       process.exitCode = 1;
       return;
     }
+
     const width = Math.max(60, Math.min(process.stdout.columns ?? 100, 104));
     const lines = [
-      heading(`capability graph — ${graph.agentId}`),
+      heading(`trust & capability — ${graph.agentId}`),
       `  ${graph.nodes.length} nodes · ${graph.edges.length} edges · the agent is the ◉ in the middle`,
       "",
       ...renderGraphLines(graph, { width, height: 18 }).map((l) => l.text),
       graphLegend(graph).text,
     ];
-    emit(graph, lines.join("\n"));
-  });
 
-program
-  .command("blast-radius [agentId]")
-  .description("simulate blast radius from graph data")
-  .action((agentId?: string) => {
-    const app = createCliApp();
-    const manifest = resolveAgent(app, agentId);
-    if (!manifest) return noAgent();
-    const id = manifest.id;
-    const blast = app.engine.getBlastRadius(id);
+    // The graph and the simulation are one payload, so one command shows both —
+    // two commands rendering the same data is what made them read as duplicates.
+    const blast = opts.simulate ? app.engine.getBlastRadius(manifest.id) : null;
     if (!blast) {
-      process.stderr.write(`Unknown agent: ${id}\n`);
-      process.exitCode = 1;
+      emit(graph, lines.join("\n"));
       return;
     }
 
@@ -774,30 +864,28 @@ program
       color: IMPACT_COLOR[level] ?? ansi.gray,
     }));
 
-    const assets = blast.reachable
-      .slice(0, 12)
-      .map((r) => ({
-        label: r.label.length > 26 ? r.label.slice(0, 25) + "…" : r.label,
-        value: IMPACT_RANK[r.impact] ?? 0,
-        color: IMPACT_COLOR[r.impact] ?? ansi.gray,
-        suffix: r.impact,
-      }));
+    const assets = blast.reachable.slice(0, 12).map((r) => ({
+      label: r.label.length > 26 ? r.label.slice(0, 25) + "…" : r.label,
+      value: IMPACT_RANK[r.impact] ?? 0,
+      color: IMPACT_COLOR[r.impact] ?? ansi.gray,
+      suffix: r.impact,
+    }));
 
-    const lines = [
-      heading(`blast radius — ${blast.agentId}`),
+    lines.push(
+      "",
+      heading(`simulated impact — ${blast.reachable.length} reachable`),
       ansi.gray("  simulation only — nothing is executed"),
       "",
       `  ${chips(blast.affectedDomains.map((d) => ({ text: d, color: ansi.cyan })))}`,
       "",
-      heading(`reachable impact (${blast.reachable.length})`),
       ...barChart(byImpact, { width: 18, max: Math.max(...byImpact.map((b) => b.value), 1) }),
       "",
       heading("what can be reached"),
       ...barChart(assets, { width: 18, max: 4 }),
       "",
-      ansi.gray("  full paths:  pnpm ag --json blast-radius " + id),
-    ];
-    emit(blast, lines.join("\n"));
+      ansi.gray(`  full paths:  agentguard --json trust ${manifest.id}`),
+    );
+    emit({ graph, blast }, lines.join("\n"));
   });
 
 // ---- findings / report ----------------------------------------------------
@@ -808,7 +896,7 @@ program
     const app = createCliApp();
     const findings = app.engine.listFindings();
     if (findings.length === 0) {
-      emit([], [heading("findings"), "", ansi.gray("  No findings yet. Run: pnpm ag demo run")].join("\n"));
+      emit([], [heading("findings"), "", ansi.gray("  No findings yet. Run a trap: agentguard test run data-extraction")].join("\n"));
       return;
     }
 
@@ -877,11 +965,17 @@ demo
   .option("--follow", "stream the live war room")
   .action(async (opts: { scenario?: ScenarioKey; follow?: boolean }) => {
     const app = createCliApp();
+    if (!requireSandbox(app)) return;
     const ids: ScenarioKey[] = opts.scenario ? [opts.scenario] : SCENARIO_IDS;
     const missions: Mission[] = [];
     for (const id of ids) {
-      missions.push(await runScenarioLive(app, id, Boolean(opts.follow)));
+      const m = await runScenarioLive(app, id, Boolean(opts.follow));
+      // A failed run has already explained itself; running the other 23 would just
+      // repeat the same failure twenty-three times.
+      if (!m) break;
+      missions.push(m);
     }
+    if (missions.length === 0) return;
 
     const rows: DemoRow[] = [];
     let prev: number | null = null;
@@ -945,7 +1039,7 @@ program
     const app = createCliApp();
     const m = missionId ? app.engine.getMission(missionId) : app.engine.listMissions()[0];
     if (!m) {
-      process.stderr.write("No mission yet. Run: agentguard demo run\n");
+      process.stderr.write("No mission yet. Run one: agentguard test run data-extraction\n");
       process.exitCode = 1;
       return;
     }
@@ -971,6 +1065,8 @@ receiptCmd
     const missions: Mission[] = [];
 
     if (opts.scenario || repeat > 1) {
+      if (!requireSandbox(app)) return;
+      await warnIfNoProvider(app);
       const scenarioId = opts.scenario ?? "data-extraction";
       if (!SCENARIO_IDS.includes(scenarioId)) {
         process.stderr.write(`Unknown scenario: ${scenarioId}\n`);
@@ -1078,7 +1174,7 @@ program
     const app = createCliApp();
     const m = missionId ? app.engine.getMission(missionId) : app.engine.listMissions()[0];
     if (!m) {
-      process.stderr.write("No mission yet. Run: agentguard demo run\n");
+      process.stderr.write("No mission yet. Run one: agentguard test run data-extraction\n");
       process.exitCode = 1;
       return;
     }
@@ -1146,6 +1242,8 @@ program
         process.exitCode = 1;
         return;
       }
+      // The gate executes the affected traps through the sandbox agent.
+      if (!requireSandbox(app)) return;
       for (const id of affectedTraps) {
         const m = await app.lab.runScenario(id as ScenarioKey, opts.profile === "weak" ? "weak" : "hardened");
         results.push({ trapId: id, status: m.tests[0]?.status ?? "ERROR" });
@@ -1217,6 +1315,7 @@ mcp
         },
         call: async (args) => {
           const scenarioId = (args.scenarioId as ScenarioKey) ?? "approval-bypass";
+          if (!app.lab.isRegistered()) return { error: sandboxNotice() };
           const m = await app.lab.runScenario(scenarioId);
           return { missionId: m.id, risk: m.risk?.score ?? null, findings: m.findings.length };
         },
@@ -1232,7 +1331,9 @@ program
   .description("open the interactive terminal UI")
   .action(async () => {
     if (!tuiSupported()) {
-      process.stderr.write("The interactive TUI needs a real terminal. Try: agentguard demo run --follow\n");
+      process.stderr.write(
+        "The interactive TUI needs a real terminal. Try: AGENTGUARD_DEMO=1 agentguard demo run --follow\n",
+      );
       process.exitCode = 1;
       return;
     }
@@ -1252,34 +1353,39 @@ if (
     [
       ansi.bold(ansi.orange("AGENTGUARD X")) + ansi.gray("  ·  the security control plane for AI agents"),
       "",
-      ansi.bold("INTERACTIVE"),
-      "  agentguard                       open the full-screen War Room UI",
+      // Grouped the way the web app's sidebar is grouped, so the two surfaces
+      // describe the same product. Every command in the tree is listed here —
+      // the old list omitted six of its own.
+      ansi.bold("OPERATIONS"),
+      "  agentguard                              interactive War Room UI",
+      "  agentguard mission start|status|list|replay <id>",
+      "  agentguard swarm [missionId]            stage decisions + blackboard entries",
+      "  agentguard demo run [--scenario <id>] [--follow]",
       "",
-      ansi.bold("DISCOVER"),
-      "  agentguard agent list | agent inspect <id> | agent import <repo>",
-      "  agentguard inventory | graph [agentId] | blast-radius [agentId]",
+      ansi.bold("AGENTS"),
+      "  agentguard agent list | inspect <id> | import <repo> | use <id>",
+      "  agentguard init | inventory",
+      "  agentguard audit [agentId]              static audit — nothing is executed",
       "",
-      ansi.bold("TEST"),
+      ansi.bold("EVIDENCE"),
       "  agentguard trap list | trap show <id>",
       "  agentguard test run <scenario>          red-team transcript, disclosures, judge scorecard",
-      "  agentguard demo run [--scenario <id>] [--follow]",
-      "  agentguard swarm [missionId]            stage decisions + blackboard entries",
-      "",
-      ansi.bold("PROVE"),
-      "  agentguard receipt issue [agentId] [--scenario <id>] [--repeat <n>]",
-      "  agentguard receipt verify <payload|file>",
+      "  agentguard findings | compare <a> <b> | report <missionId>",
+      "  agentguard receipt issue|verify         signed, portable receipts",
       "  agentguard ledger [agentId]             CURRENT vs SUPERSEDED",
       "",
-      ansi.bold("SHIP"),
-      "  agentguard drift check | findings | report <missionId>",
-      "  agentguard sarif [missionId] [--out file]",
-      "  agentguard pr-check [agentId] [--run] [--base <agentId>] [--traps a,b]",
+      ansi.bold("SECURITY"),
+      "  agentguard trust [agentId]              capability graph + simulated impact",
+      "  agentguard drift check [agentId]",
+      "  agentguard sarif [missionId] | pr-check [agentId] [--run]",
       "",
-      ansi.bold("SERVE"),
-      "  agentguard web   ·   agentguard mcp serve   ·   agentguard doctor",
+      ansi.bold("SYSTEM"),
+      "  agentguard web   ·   agentguard mcp serve   ·   agentguard doctor   ·   agentguard tui",
       "",
       ansi.gray("Global flags: --json --quiet --provider --config --output --local"),
-      ansi.gray("DEMO / SANDBOX / NO REAL DATA"),
+      ansi.gray("A fresh workspace is empty. Add an agent:  agentguard agent import <owner/repo>"),
+      ansi.gray("The built-in sandbox agent (what traps run against) is opt-in:"),
+      ansi.gray("  AGENTGUARD_DEMO=1 agentguard demo run"),
       "",
     ].join("\n"),
   );

@@ -39,8 +39,11 @@ export function Dashboard() {
   // one the run is guaranteed to fail, so say so before the click rather than
   // letting the War Room fill up and then stop for no visible reason.
   const providers = useApi(() => api.providers(), []);
+  // "Never checked" is not "failed" — warn only once every tool-capable provider
+  // has actually been checked and none of them passed.
+  const toolProviders = (providers.data ?? []).filter((p) => p.tools);
   const noToolProvider =
-    (providers.data ?? []).length > 0 && !(providers.data ?? []).some((p) => p.tools && p.health?.ok);
+    toolProviders.length > 0 && toolProviders.every((p) => p.health !== null && !p.health.ok);
 
   // When an agent is active, the whole dashboard describes that agent.
   const missions = useMemo(

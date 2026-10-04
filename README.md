@@ -397,8 +397,7 @@ agentguard agent import <repo>          import a real agent from GitHub
 agentguard agent use <id>               make an agent active (shared with the web app)
 agentguard inventory                    fleet summary + tool-mix bar charts
 agentguard audit [agentId]              static audit (nothing executed)
-agentguard graph [agentId]              draw the capability graph
-agentguard blast-radius [agentId]       impact bar chart + reachable assets
+agentguard trust [agentId]              capability graph + simulated impact (--no-simulate)
 
 TEST
 agentguard trap list                    all 24 traps, grouped by how the agent is exercised
@@ -490,6 +489,21 @@ VERIFICATION
 uses the *active agent* — the same one the web app is on. Pick it in the browser or with
 `agentguard agent use <id>`; the choice is stored with the project and both surfaces follow
 it immediately. There is no hardcoded default agent.
+
+**The built-in sandbox agent is opt-in**, exactly as in the web app. A fresh workspace has no
+agents at all, and every command says so and offers the next step rather than acting on a fixture
+nobody imported:
+
+```bash
+agentguard agent list                    # AGENTS (0), plus how to add one
+agentguard test run data-extraction      # → "the sandbox agent is not loaded; load it with …"
+AGENTGUARD_DEMO=1 agentguard demo run    # load it, and run against it
+```
+
+A run that cannot work says **why**. `agentguard doctor` reports each provider as `connected`,
+`check failed` or `not checked` — three states, not two — and adds a verdict when none is usable.
+A failed run leads with the reason taken from its own failure event, instead of an event console
+that ends in "no findings — posture within policy".
 
 Global flags: `--json` `--quiet` `--verbose` `--provider` `--config` `--output` `--local`.
 

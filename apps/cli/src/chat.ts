@@ -11,6 +11,8 @@ import {
 } from "@agentguard/receipt";
 import type { Line } from "./kind.js";
 import { missionRecap, missionSummary } from "./format.js";
+import { noAgentNotice, providerWarning, sandboxNotice } from "./support.js";
+import { failureReason, renderFailure, renderProviderWarning } from "./verify-view.js";
 
 /* ------------------------------------------------------------------ *
  * Natural-language layer.
@@ -271,6 +273,11 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Pre-coloured renderer output (verify-view), emitted verbatim with its own ANSI. */
+function preColoured(lines: string[]): Line[] {
+  return lines.map((text) => ({ text, kind: "info" as const, raw: true }));
+}
+
 /** Word-boundary match for single words, substring match for multi-word phrases. */
 function score(text: string, words: string[]): number {
   let total = 0;
@@ -439,7 +446,16 @@ export class ChatSession {
   // ---- handlers -----------------------------------------------------------
 
   private async runScenario(id: ScenarioKey): Promise<Line[]> {
+    // The sandbox agent is opt-in; without it a trap has nothing to drive.
+    if (!this.lab.isRegistered()) return [{ text: sandboxNotice(), kind: "warn" }];
+
     const scenario = SCENARIOS[id];
+    const activeId = this.engine.getActiveAgentId();
+    const active = activeId ? this.engine.getAgent(activeId) : undefined;
+    // Traps drive the sandbox agent. A different selected agent is audited, never
+    // driven, so a run must not be read as a test of it.
+    const selectedElsewhere = active && active.id !== this.lab.agentId ? active.name : null;
+
     const opener = await this.phrase(
       `Got it — that maps to the "${scenario.title}" scenario. Starting a controlled mission now.`,
       { scenario: id, agent: this.lab.manifest.name, description: scenario.description },
@@ -448,8 +464,29 @@ export class ChatSession {
       { text: opener.text, kind: "info" },
       { text: `Running ${scenario.title} against ${this.lab.manifest.name} (sandbox, no real actions)…`, kind: "accent" },
     ];
+    if (selectedElsewhere) {
+      lines.push({
+        text: `  aimed at the built-in sandbox agent — ${selectedElsewhere} is audited, not driven.`,
+        kind: "dim",
+      });
+    }
 
-    const mission = await this.lab.runScenario(id);
+    const warning = await providerWarning(this.engine);
+    if (warning) lines.push(...preColoured(renderProviderWarning(warning)));
+
+    let mission: Mission;
+    try {
+      mission = await this.lab.runScenario(id);
+    } catch (err) {
+      // The engine marked the mission failed and rethrew: lead with that reason
+      // rather than the raw error, the way the web War Room opens a failed run.
+      const failed = this.engine
+        .listMissions()
+        .find((m) => m.agentId === this.lab.agentId && m.status === "failed");
+      if (failed && failureReason(failed)) return preColoured(renderFailure(failed));
+      return [{ text: (err as Error).message, kind: "err" }];
+    }
+
     this.lastMissionId = mission.id;
     lines.push({ text: "", kind: "info" });
     lines.push(...missionSummary(mission));
@@ -575,7 +612,9 @@ export class ChatSession {
 
   /** Seal the evidence already collected, using the same code path as the API. */
   private sealReceipt(): Line[] {
-    const manifest = this.engine.getAgent(this.lab.agentId);
+    const agentId = this.engine.getActiveAgentId();
+    if (!agentId) return [{ text: noAgentNotice(), kind: "warn" }];
+    const manifest = this.engine.getAgent(agentId);
     if (!manifest) return [{ text: "No agent registered — nothing to seal.", kind: "dim" }];
     const latest = this.engine
       .listMissions()
@@ -623,7 +662,9 @@ export class ChatSession {
   }
 
   private showLedger(): Line[] {
-    const manifest = this.engine.getAgent(this.lab.agentId);
+    const agentId = this.engine.getActiveAgentId();
+    if (!agentId) return [{ text: noAgentNotice(), kind: "warn" }];
+    const manifest = this.engine.getAgent(agentId);
     if (!manifest) return [{ text: "No agent registered.", kind: "dim" }];
     const history = this.ledger().history(manifest.id);
     if (history.length === 0) {
@@ -672,7 +713,14 @@ export class ChatSession {
   }
 
   private showDrift(): Line[] {
-    const drift = this.engine.checkDrift(this.lab.agentId, this.lab.driftManifest, this.lab.manifest);
+    const agentId = this.engine.getActiveAgentId();
+    if (!agentId) return [{ text: noAgentNotice(), kind: "warn" }];
+    // lab.driftManifest / lab.manifest are the sandbox's own two snapshots; any
+    // other agent is diffed against the baseline the engine stored for it.
+    const drift =
+      agentId === this.lab.agentId
+        ? this.engine.checkDrift(agentId, this.lab.driftManifest, this.lab.manifest)
+        : this.engine.checkDrift(agentId);
     const lines: Line[] = [
       { text: `Posture drift: ${drift.changedCapabilityCount} change(s), risk delta ${drift.riskDelta > 0 ? "+" : ""}${drift.riskDelta}.`, kind: "warn" },
     ];
@@ -683,7 +731,9 @@ export class ChatSession {
   }
 
   private showGraph(): Line[] {
-    const g = this.engine.getGraph(this.lab.agentId);
+    const agentId = this.engine.getActiveAgentId();
+    if (!agentId) return [{ text: noAgentNotice(), kind: "warn" }];
+    const g = this.engine.getGraph(agentId);
     if (!g) return [{ text: "No graph available.", kind: "dim" }];
     return [
       { text: `${g.nodes.length} nodes, ${g.edges.length} edges.`, kind: "info" },
@@ -692,7 +742,9 @@ export class ChatSession {
   }
 
   private showBlast(): Line[] {
-    const b = this.engine.getBlastRadius(this.lab.agentId);
+    const agentId = this.engine.getActiveAgentId();
+    if (!agentId) return [{ text: noAgentNotice(), kind: "warn" }];
+    const b = this.engine.getBlastRadius(agentId);
     if (!b) return [{ text: "No blast radius available.", kind: "dim" }];
     return [
       { text: `Simulated reach: ${b.reachable.length} node(s) across ${b.affectedDomains.join(", ")}.`, kind: "info" },

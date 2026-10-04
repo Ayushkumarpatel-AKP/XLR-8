@@ -3,9 +3,11 @@ import type { AgentGuardEngine } from "@agentguard/core";
 import { SWARM_AGENTS } from "@agentguard/core";
 import type { DemoLab } from "@agentguard/demo-lab";
 import { SCENARIO_IDS, SCENARIOS, listScenarios, type ScenarioKey } from "@agentguard/demo-lab";
-import { RESET, colourLine, fit, visibleLength, wrap, type Kind, type Line } from "./kind.js";
+import { RESET, colourLine, fit, stripAnsi, visibleLength, wrap, type Kind, type Line } from "./kind.js";
 import { renderBanner } from "./banner.js";
-import { ChatSession } from "./chat.js";
+import { ChatSession, classify } from "./chat.js";
+import { noAgentNotice, providerWarning, sandboxNotice } from "./support.js";
+import { failureReason, renderFailure, renderProviderWarning } from "./verify-view.js";
 import { demoSummary, findingLines, missionOutcome, missionSteps, missionSummary, type DemoRow } from "./format.js";
 import { graphLegend, renderGraphLines, revealFrames } from "./graph-render.js";
 
@@ -57,6 +59,47 @@ const LIVE_EVENT_TYPES = new Set<string>([
 
 export { visibleLength, fit, wrap };
 
+/**
+ * Adapt a shared `verify-view` renderer (which returns pre-coloured terminal
+ * strings) to TUI lines, so this surface shows the same blocks the other
+ * commands do instead of re-wording them.
+ *
+ * `renderProviderWarning`/`renderFailure` spread a multi-line string
+ * (`...withPrefix(...)`), which the spread turns into one entry per character.
+ * Reassemble those single-character runs before splitting into display lines, so
+ * the same adapter is correct whether or not the spread is fixed.
+ */
+function renderedLines(blocks: string[], fallback: Kind = "warn"): Line[] {
+  const joined: string[] = [];
+  let chars = "";
+  for (const block of blocks) {
+    if (block.length <= 1) {
+      chars += block;
+      continue;
+    }
+    if (chars) {
+      joined.push(chars);
+      chars = "";
+    }
+    joined.push(block);
+  }
+  if (chars) joined.push(chars);
+
+  const out: Line[] = [];
+  for (const block of joined) {
+    for (const raw of block.split("\n")) {
+      const text = stripAnsi(raw);
+      if (!text.trim()) {
+        out.push({ text: "", kind: "info" });
+        continue;
+      }
+      const kind: Kind = raw.includes("\x1b[38;5;245m") ? "dim" : raw.includes("\x1b[38;5;167m") ? "err" : fallback;
+      out.push({ text, kind });
+    }
+  }
+  return out;
+}
+
 export class Tui {
   private readonly ctx: TuiContext;
   private readonly chat: ChatSession;
@@ -73,6 +116,9 @@ export class Tui {
   private spinnerTimer: NodeJS.Timeout | null = null;
   private renderQueued = false;
   private closed = false;
+  /** Set while a mission is in flight so the status bar can carry the live run. */
+  private liveRun: { title: string; startedAt: number; redteamTurns: number; responses: number } | null = null;
+  private confirmResolve: ((value: boolean) => void) | null = null;
 
   constructor(ctx: TuiContext) {
     this.ctx = ctx;
@@ -174,14 +220,26 @@ export class Tui {
     };
 
     const unsubscribe = this.engine.bus.subscribe((e) => {
+      if (e.type === "mission.started") {
+        const scenarioId = e.payload.scenarioId;
+        const title = typeof scenarioId === "string" ? (SCENARIOS[scenarioId as ScenarioKey]?.title ?? label) : label;
+        this.liveRun = { title, startedAt: Date.now(), redteamTurns: 0, responses: 0 };
+        this.setStatus(this.runningStatus());
+        draw();
+        return;
+      }
+      if (e.type === "redteam.turn") {
+        if (this.liveRun) this.liveRun.redteamTurns += 1;
+        return;
+      }
+      if (e.type === "agent.response") {
+        if (this.liveRun) this.liveRun.responses += 1;
+        return;
+      }
       if (e.type === "agent.state_changed") {
         const id = String(e.payload.agentId ?? "");
         const state = String(e.payload.state ?? "");
         if (id) swarm.set(id, state);
-        draw();
-        return;
-      }
-      if (e.type === "mission.started") {
         draw();
         return;
       }
@@ -195,6 +253,7 @@ export class Tui {
       await fn();
     } finally {
       unsubscribe();
+      this.liveRun = null;
       this.clearOverlay();
     }
   }
@@ -207,6 +266,16 @@ export class Tui {
     });
     if (!mission) throw new Error("scenario produced no mission");
     return mission;
+  }
+
+  /**
+   * The "lead with why" block for the most recently failed mission, or an empty
+   * list. The engine marks a mission failed and rethrows, so a run path that is
+   * catching the throw uses this to open with the reason instead of the raw error.
+   */
+  failureLines(): Line[] {
+    const failed = this.engine.listMissions().find((m) => m.status === "failed" && failureReason(m));
+    return failed ? renderedLines(renderFailure(failed)) : [];
   }
 
   get engine(): AgentGuardEngine {
@@ -275,11 +344,33 @@ export class Tui {
   private shutdown(): void {
     if (this.closed) return;
     this.closed = true;
+    this.confirmResolve?.(false);
+    this.confirmResolve = null;
     this.resolveExit?.();
   }
 
+  /** The agent the CLI and the web app are both on — never the sandbox by fiat. */
+  private activeAgentName(): string {
+    const id = this.engine.getActiveAgentId();
+    return (id ? this.engine.getAgent(id)?.name : undefined) ?? "no agent registered";
+  }
+
+  /** `ready · <active agent>`, the resting state the status bar returns to. */
+  private readyStatus(): string {
+    return `ready · ${this.activeAgentName()}`;
+  }
+
+  private runningStatus(): string {
+    const run = this.liveRun;
+    if (!run) return this.status;
+    const turns = run.redteamTurns > 0 ? run.redteamTurns : run.responses;
+    const seconds = Math.max(0, Math.round((Date.now() - run.startedAt) / 1000));
+    const dot = this.spinner % 2 === 0 ? "38;5;208" : "38;5;130";
+    return `\x1b[${dot}m●\x1b[38;5;230m running · ${run.title} · ${turns} turn${turns === 1 ? "" : "s"} · ${seconds}s${RESET}`;
+  }
+
   private welcome(): void {
-    this.setStatus(`ready · ${this.ctx.lab.manifest.name}`);
+    this.setStatus(this.readyStatus());
   }
 
   /** Animated entry: the wordmark draws in row by row, then the summary. */
@@ -302,7 +393,7 @@ export class Tui {
       text:
         this.ctx.lab.runtimeMode === "llm"
           ? "  agent runtime: MODEL-DRIVEN — a real LLM decides every tool call"
-          : "  agent runtime: offline scripted fallback — set GROQ_API_KEY in .env for a real model",
+          : "  agent runtime: no tool-capable model provider configured — set GROQ_API_KEY, or add one on the Providers page",
       kind: this.ctx.lab.runtimeMode === "llm" ? "ok" : "err",
     });
     this.lines.push({ text: "", kind: "info" });
@@ -316,6 +407,12 @@ export class Tui {
 
   private onKey(chunk: string): void {
     if (this.closed) return;
+    // While a pre-flight question is open, every keystroke is an answer — never
+    // a new line to submit.
+    if (this.confirmResolve) {
+      this.feed(chunk);
+      return;
+    }
     // Piped/pasted multi-line input: each line is submitted in turn.
     if (chunk.length > 1 && /[\r\n]/.test(chunk)) {
       const parts = chunk.split(/\r\n|\r|\n/);
@@ -332,6 +429,14 @@ export class Tui {
   /** Handle a single keypress or escape sequence. */
   private feed(chunk: string): void {
     if (this.closed) return;
+    if (this.confirmResolve) {
+      const answer = chunk.toLowerCase();
+      if (answer.includes("y")) return this.resolveConfirm(true);
+      if (answer.includes("n") || chunk === "\r" || chunk === "\n" || chunk === "\x1b" || chunk === "\x03") {
+        return this.resolveConfirm(false);
+      }
+      return;
+    }
     switch (chunk) {
       case "\x1b[A":
         return this.moveMenu(-1);
@@ -433,7 +538,8 @@ export class Tui {
       } finally {
         this.busy = false;
         this.stopSpinner();
-        this.setStatus(`ready · ${this.ctx.lab.manifest.name}`);
+        this.liveRun = null;
+        this.setStatus(this.readyStatus());
         this.requestRender();
       }
       return;
@@ -441,6 +547,13 @@ export class Tui {
 
     // Plain text goes to the conversational layer, which may start a mission.
     this.say(`> ${raw}`, "accent");
+    const intent = classify(raw);
+    // The conversational layer only ever runs the sandbox agent, so a run
+    // intent is held to the same pre-flight as `/demo` and `/test`.
+    if (intent.kind === "run" && !(await this.preflight())) {
+      this.requestRender();
+      return;
+    }
     this.busy = true;
     this.startSpinner();
     try {
@@ -454,9 +567,43 @@ export class Tui {
     } finally {
       this.busy = false;
       this.stopSpinner();
-      this.setStatus(`ready · ${this.ctx.lab.manifest.name}`);
+      this.liveRun = null;
+      this.setStatus(this.readyStatus());
       this.requestRender();
     }
+  }
+
+  /**
+   * The shared pre-flight for every run path: refuse when the sandbox agent is
+   * not loaded, and surface an unusable provider before a run starts (the web
+   * shows this before the click). Returns false when the run must not start.
+   */
+  async preflight(): Promise<boolean> {
+    if (!this.ctx.lab.isRegistered()) {
+      this.say(sandboxNotice(), "warn");
+      return false;
+    }
+    const warning = await providerWarning(this.engine);
+    if (!warning) return true;
+    this.sayLines(renderedLines(renderProviderWarning(warning)));
+    if (!process.stdin.isTTY) return true;
+    this.say("  start the run anyway?  [y/N]", "warn");
+    const proceed = await this.confirm();
+    if (!proceed) this.say("run cancelled.", "dim");
+    return proceed;
+  }
+
+  private confirm(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      this.confirmResolve = resolve;
+    });
+  }
+
+  private resolveConfirm(value: boolean): void {
+    const resolve = this.confirmResolve;
+    this.confirmResolve = null;
+    this.requestRender();
+    resolve?.(value);
   }
 
   /** Execute a line without a terminal (used by tests and scripted runs). */
@@ -473,7 +620,7 @@ export class Tui {
     const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     this.spinnerTimer = setInterval(() => {
       this.spinner = (this.spinner + 1) % frames.length;
-      this.setStatus(`${frames[this.spinner] ?? ""} working…`);
+      this.setStatus(this.liveRun ? this.runningStatus() : `${frames[this.spinner] ?? ""} working…`);
     }, 90);
   }
 
@@ -594,6 +741,7 @@ function buildCommands(): SlashCommand[] {
       args: "[scenario]",
       description: "run the demo lab (all four, or one scenario)",
       async run(arg, app) {
+        if (!(await app.preflight())) return;
         const ids: ScenarioKey[] = arg && SCENARIO_KEY_SET.has(arg as ScenarioKey) ? [arg as ScenarioKey] : SCENARIO_IDS;
         const rows: DemoRow[] = [];
         let prevRisk: number | null = null;
@@ -604,8 +752,15 @@ function buildCommands(): SlashCommand[] {
           if (!id) continue;
           const scenario = SCENARIOS[id];
           app.say(`▶ ${scenario.title}   [${i + 1}/${ids.length}]`, "accent");
-          const m = await app.runScenarioAnimated(id);
-
+          let m: Mission;
+          try {
+            m = await app.runScenarioAnimated(id);
+          } catch {
+            const failure = app.failureLines();
+            if (failure.length > 0) await app.revealLines(failure, 35);
+            else app.say("the run failed before it tested anything — try /doctor", "err");
+            break;
+          }
           await app.revealLines(missionSteps(m));
           await app.revealLines(missionSummary(m), 35);
           if (m.findings.length > 0) await app.revealLines(findingLines(m), 45);
@@ -703,7 +858,9 @@ function buildCommands(): SlashCommand[] {
       name: "graph",
       description: "render the capability/trust graph",
       async run(_arg, app) {
-        const g = app.engine.getGraph(app.lab.agentId);
+        const id = app.engine.getActiveAgentId();
+        if (!id) return app.say(noAgentNotice(), "warn");
+        const g = app.engine.getGraph(id);
         if (!g) return app.say("no graph available", "err");
         app.say(`  ${g.nodes.length} nodes · ${g.edges.length} edges`, "title");
         await app.animateGraph(g);
@@ -715,7 +872,8 @@ function buildCommands(): SlashCommand[] {
       args: "[agentId]",
       description: "simulate + render the blast radius",
       async run(arg, app) {
-        const id = arg || app.lab.agentId;
+        const id = arg || app.engine.getActiveAgentId();
+        if (!id) return app.say(noAgentNotice(), "warn");
         const graph = app.engine.getGraph(id);
         const b = app.engine.getBlastRadius(id);
         if (!graph || !b) return app.say(`unknown agent: ${id}`, "err");
@@ -742,9 +900,18 @@ function buildCommands(): SlashCommand[] {
       args: "[scenario]",
       description: "run one scenario and grade it",
       async run(arg, app) {
+        if (!(await app.preflight())) return;
         const id: ScenarioKey = arg && SCENARIO_KEY_SET.has(arg as ScenarioKey) ? (arg as ScenarioKey) : "approval-bypass";
         app.say(`▶ running ${SCENARIOS[id].title}…`, "accent");
-        const m = await app.runScenarioAnimated(id);
+        let m: Mission;
+        try {
+          m = await app.runScenarioAnimated(id);
+        } catch {
+          const failure = app.failureLines();
+          if (failure.length > 0) await app.revealLines(failure, 35);
+          else app.say("the run failed before it tested anything.", "err");
+          return;
+        }
         const t = m.tests[0];
         await app.revealLines(missionSteps(m));
         app.say(`   ${t?.status ?? "-"}  ${t?.title ?? id}  severity ${t?.severity ?? "-"}  ${t?.durationMs ?? 0}ms`, t?.status === "PASS" ? "ok" : "err");

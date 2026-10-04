@@ -27,10 +27,10 @@ async function main(): Promise<void> {
 
   const providers = await engine.router.checkHealth();
   for (const p of providers) {
-    console.log(`provider      : ${p.id.padEnd(14)} ${p.health?.ok ? "✓ connected" : "○ unavailable"}  ${p.tools ? "(tools)" : ""}  ${p.model}`);
+    console.log(`provider      : ${p.id.padEnd(14)} ${p.health ? (p.health.ok ? "✓ connected" : "○ check failed") : "○ not checked"}  ${p.tools ? "(tools)" : ""}  ${p.model}`);
   }
   if (lab.runtimeMode !== "llm") {
-    console.error("\n✗ No tool-capable provider available — set GROQ_API_KEY in .env and retry.");
+    console.error("\n✗ No tool-capable model provider is configured. Set GROQ_API_KEY, or add one on the Providers page.");
     process.exitCode = 1;
     return;
   }

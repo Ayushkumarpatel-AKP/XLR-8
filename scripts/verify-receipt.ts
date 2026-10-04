@@ -59,7 +59,7 @@ async function main(): Promise<void> {
 
   if (lab.runtimeMode !== "llm") {
     console.log(
-      `${YELLOW}No tool-capable model provider is configured, so no attacker can be driven.` +
+      `${YELLOW}No tool-capable model provider is configured. Set GROQ_API_KEY, or add one on the Providers page.` +
         `\nThis run will show honest degradation, not a fabricated conversation.${OFF}`,
     );
   }

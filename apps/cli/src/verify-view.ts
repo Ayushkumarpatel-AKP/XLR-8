@@ -430,6 +430,46 @@ export function renderSarif(input: {
   ];
 }
 
+/* ------------------------------------------------------------------ *
+ * A failed run leads with WHY.
+ *
+ * The web War Room opens a failed mission with the reason, taken from the
+ * mission's own failure event. The CLI left that message truncated inside an
+ * event console that then printed "No findings — posture within policy.", which
+ * is the opposite of what happened.
+ * ------------------------------------------------------------------ */
+
+/** The reason from the mission's own `mission.failed` event, or null if it did not fail. */
+export function failureReason(mission: Mission): string | null {
+  if (mission.status !== "failed") return null;
+  const event = [...mission.events].reverse().find((e) => e.type === "mission.failed");
+  // The engine prefixes the detail; drop it so "why" is stated once, not twice.
+  const detail = (event?.message ?? "").replace(/^Mission failed:\s*/i, "").trim();
+  return detail || "The run stopped before it could test anything.";
+}
+
+/** Lead-with-why block. Empty when the mission did not fail. */
+export function renderFailure(mission: Mission): string[] {
+  const why = failureReason(mission);
+  if (!why) return [];
+  return [
+    heading("this run failed — nothing was tested"),
+    // `withPrefix` returns a single string — split it, or the spread below turns
+    // it into one array entry per character.
+    ...withPrefix(`  ${ansi.red("✗")} `, why).split("\n"),
+    "",
+    ansi.gray("  No findings were produced, so there is no rating to read. A provider that is"),
+    ansi.gray("  rate-limited, or whose key has expired, is the usual cause."),
+    "",
+    `  ${ansi.bold("check providers")}  agentguard doctor`,
+  ];
+}
+
+/** The pre-flight warning, printed before a run that cannot work. */
+export function renderProviderWarning(text: string): string[] {
+  return ["", ...withPrefix(`  ${ansi.yellow("▲")} `, text).split("\n")];
+}
+
 /** A compact scorecard line, for lists. */
 export function scorecardLine(agentName: string, test: TestResult | undefined): string {
   if (!test?.judge) return `${pad(agentName.slice(0, 28), 30)} ${ansi.gray("not judged")}`;
