@@ -191,6 +191,7 @@ export function createApiContext(): ApiContext {
       sourceRef: a.sourceRef,
       importedFrom: a.annotations?.importedFrom ?? null,
       classifiedBy: a.annotations?.classifiedBy ?? null,
+      avatarUrl: a.annotations?.avatarUrl ?? null,
       interactive: engine.hasRuntime(a.id),
       mcpServers: a.mcpServers,
       // Prompts exist only where the agent can actually be driven. Audit-only

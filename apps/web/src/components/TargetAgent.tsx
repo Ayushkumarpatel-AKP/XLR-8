@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Mission } from "@agentguard/contracts";
 import { api, type AgentTarget } from "../lib/api.js";
+import { Avatar } from "./ui.js";
 
 interface Bubble {
   role: "user" | "agent";
@@ -59,7 +60,6 @@ export function TargetAgent({
   height?: number;
 }) {
   const hue = agentHue(target.agentId);
-  const initial = target.name.trim().charAt(0).toUpperCase() || "A";
   const origin = originOf(target);
 
   return (
@@ -81,12 +81,7 @@ export function TargetAgent({
 
       <div className="target-body">
         <div className="target-brand">
-          <span
-            className="target-logo"
-            style={{ background: `linear-gradient(135deg, hsl(${hue} 45% 30%), hsl(${hue} 60% 48%))` }}
-          >
-            {initial}
-          </span>
+          <Avatar src={target.avatarUrl} name={target.name} hue={hue} />
           <span>
             <span className="target-title">{target.name}</span>
             <span className="target-sub">

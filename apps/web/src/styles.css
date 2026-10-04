@@ -178,6 +178,14 @@ button, input, select {
   padding: 16px; box-shadow: var(--shadow); min-width: 0;
 }
 .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 10px; }
+.card-head-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+/* An agent's picture — its importing repo's avatar, or its initial. */
+.avatar {
+  border-radius: 9px; display: grid; place-items: center; flex: none;
+  background: linear-gradient(135deg, #2c5745, #4fbf7a); color: #fff; font-weight: 800;
+  object-fit: cover; border: 1px solid var(--border);
+}
 .card-title { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim); font-weight: 700; }
 .card-sub { font-size: 11px; color: var(--text-faint); }
 
@@ -320,10 +328,6 @@ table.table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .target-body { padding: 14px; }
 
 .target-brand { display: flex; align-items: center; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid #eceff1; }
-.target-logo {
-  width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
-  background: linear-gradient(135deg, #2c5745, #4fbf7a); color: #fff; font-weight: 800;
-}
 .target-title { display: block; font-weight: 700; font-size: 13px; color: #12312a; }
 .target-sub { display: block; font-size: 11px; color: #6b7280; }
 .target-live { margin-left: auto; font-size: 11px; color: #1a7f4b; font-weight: 600; }

@@ -43,6 +43,21 @@ beforeAll(async () => {
       res.end(JSON.stringify(MANIFEST));
       return;
     }
+    // Repository metadata: the default branch, and the owner's avatar.
+    const repoMatch = /\/repos\/([\w.-]+\/[\w.-]+)$/.exec(url);
+    if (repoMatch) {
+      res.end(
+        JSON.stringify({
+          default_branch: "main",
+          owner: {
+            avatar_url: repoMatch[1]!.startsWith("evil/")
+              ? "https://tracker.example.net/pixel.png"
+              : "https://avatars.githubusercontent.com/u/12345?v=4",
+          },
+        }),
+      );
+      return;
+    }
     res.statusCode = 404;
     res.end(JSON.stringify({ error: "not found" }));
   });
@@ -125,5 +140,27 @@ describe("GitHub ingestion", () => {
     expect(manifest.annotations?.classifiedBy).toBe("groq (4 tools)");
     expect(manifest.sourceRef).toBe(result.sourceRef);
     expect(manifest.tools).toHaveLength(result.tools.length);
+  });
+
+  it("carries the source's own avatar, so an imported agent is recognisable", async () => {
+    const result = await ingestFromGitHub(
+      { repo: "owner/repo", path: "openapi.json" },
+      { rawBase: base, apiBase: base },
+    );
+    expect(result.avatarUrl).toBe("https://avatars.githubusercontent.com/u/12345?v=4");
+
+    const manifest = ingestedToManifest(result, { annotations: { importedFrom: result.sourceRef } });
+    expect(manifest.annotations?.avatarUrl).toBe("https://avatars.githubusercontent.com/u/12345?v=4");
+    // provenance the caller passed is still intact
+    expect(manifest.annotations?.importedFrom).toContain("github:owner/repo");
+  });
+
+  it("refuses an avatar from outside GitHub rather than rendering it", async () => {
+    const result = await ingestFromGitHub(
+      { repo: "evil/repo", path: "openapi.json" },
+      { rawBase: base, apiBase: base },
+    );
+    expect(result.avatarUrl).toBeUndefined();
+    expect(ingestedToManifest(result, {}).annotations).toBeUndefined();
   });
 });

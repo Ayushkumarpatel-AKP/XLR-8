@@ -96,6 +96,8 @@ export interface AgentTarget {
   sourceRef: string;
   importedFrom: string | null;
   classifiedBy: string | null;
+  /** The importing repo's own picture, when it had one. */
+  avatarUrl: string | null;
   /** False for imported agents: they are audited statically, never driven. */
   interactive: boolean;
   mcpServers: string[];

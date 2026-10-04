@@ -102,6 +102,12 @@ export const AgentAnnotationsSchema = z.object({
   /** Provider id / model that inferred the tool semantics, when used. */
   classifiedBy: z.string().optional(),
   classifiedAt: z.string().optional(),
+  /**
+   * The source's own picture — the GitHub owner's avatar — so an imported agent
+   * is recognisable instead of showing a letter. Only ever a GitHub avatar host;
+   * see the check in the ingester.
+   */
+  avatarUrl: z.string().optional(),
 });
 export type AgentAnnotations = z.infer<typeof AgentAnnotationsSchema>;
 

@@ -33,6 +33,12 @@ export interface IngestedAgent {
   sourceRef: string;
   /** Human-readable notes about what happened (limits, choices, fallbacks). */
   notes: string[];
+  /**
+   * The owner's GitHub avatar, when the repository has one. It is the closest
+   * thing a repository has to a logo, and it makes an imported agent
+   * recognisable in the UI.
+   */
+  avatarUrl?: string;
 }
 
 export interface IngestOptions {
@@ -143,17 +149,40 @@ function toolFromManifestEntry(entry: Record<string, unknown>, hostTarget: ToolT
   };
 }
 
-async function resolveDefaultBranch(repo: string, apiBase: string, token?: string): Promise<string> {
-  const text = await get(`${apiBase}/repos/${repo}`, token, 200_000);
-  if (text) {
-    try {
-      const meta = JSON.parse(text) as { default_branch?: string };
-      if (meta.default_branch) return meta.default_branch;
-    } catch {
-      /* ignore */
-    }
+interface RepoMeta {
+  defaultBranch: string;
+  avatarUrl?: string;
+}
+
+/**
+ * Only GitHub's own avatar hosts.
+ *
+ * The URL comes from an API response, and it is later rendered by a browser, so
+ * it is worth narrowing: anything else is dropped rather than turned into an
+ * image request the user never asked for.
+ */
+function safeAvatarUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const url = new URL(value);
+    const ok = ["avatars.githubusercontent.com", "github.com", "raw.githubusercontent.com"];
+    return url.protocol === "https:" && ok.includes(url.hostname) ? url.toString() : undefined;
+  } catch {
+    return undefined;
   }
-  return "main";
+}
+
+/** The repository's own metadata: its default branch and its owner's picture. */
+async function repoMeta(repo: string, apiBase: string, token?: string): Promise<RepoMeta> {
+  const text = await get(`${apiBase}/repos/${repo}`, token, 200_000);
+  if (!text) return { defaultBranch: "main" };
+  try {
+    const meta = JSON.parse(text) as { default_branch?: string; owner?: { avatar_url?: unknown } };
+    const avatarUrl = safeAvatarUrl(meta.owner?.avatar_url);
+    return { defaultBranch: meta.default_branch ?? "main", ...(avatarUrl ? { avatarUrl } : {}) };
+  } catch {
+    return { defaultBranch: "main" };
+  }
 }
 
 /**
@@ -170,7 +199,10 @@ export async function ingestFromGitHub(input: GitHubRef, opts: IngestOptions = {
     throw new Error(`repo must look like "owner/name" (got "${input.repo}")`);
   }
 
-  const ref = input.ref ?? (await resolveDefaultBranch(input.repo, apiBase, opts.token));
+  // Fetched even when a ref is given: the same response carries the owner's
+  // avatar, which is the only "logo" a repository has.
+  const meta = await repoMeta(input.repo, apiBase, opts.token);
+  const ref = input.ref ?? meta.defaultBranch;
   const candidates = input.path ? [input.path] : DEFAULT_PATHS;
 
   for (const path of candidates) {
@@ -208,6 +240,7 @@ export async function ingestFromGitHub(input: GitHubRef, opts: IngestOptions = {
         tools,
         sourceRef,
         notes,
+        ...(meta.avatarUrl ? { avatarUrl: meta.avatarUrl } : {}),
       };
     }
 
@@ -229,6 +262,7 @@ export async function ingestFromGitHub(input: GitHubRef, opts: IngestOptions = {
         tools,
         sourceRef,
         notes,
+        ...(meta.avatarUrl ? { avatarUrl: meta.avatarUrl } : {}),
       };
     }
 
@@ -261,6 +295,14 @@ export function ingestedToManifest(result: IngestedAgent, overrides: Partial<Age
       granted: true,
     },
   ];
+  // Provenance travels with the agent: the source's avatar rides along with
+  // `importedFrom` and the rest, and anything the caller passed wins.
+  const mergedAnnotations: Record<string, string> = {
+    ...(result.avatarUrl ? { avatarUrl: result.avatarUrl } : {}),
+    ...overrides.annotations,
+  };
+  const annotations = Object.keys(mergedAnnotations).length > 0 ? { annotations: mergedAnnotations } : {};
+
   return {
     id: overrides.id ?? slug(result.name),
     name: overrides.name ?? result.name,
@@ -275,6 +317,6 @@ export function ingestedToManifest(result: IngestedAgent, overrides: Partial<Age
     mcpServers: overrides.mcpServers ?? [],
     externalConnectivity: overrides.externalConnectivity ?? true,
     sourceRef: overrides.sourceRef ?? result.sourceRef,
-    ...(overrides.annotations ? { annotations: overrides.annotations } : {}),
+    ...annotations,
   };
 }

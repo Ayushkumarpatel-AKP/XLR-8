@@ -1,11 +1,38 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { MissionEvent, SwarmAgentStatus } from "@agentguard/contracts";
 import { fmtTime, SEVERITY_ORDER, severityRank } from "../lib/format.js";
 
-export function Card({ title, sub, right, children, className = "" }: {
+/**
+ * The subject's own picture, or its initial when there is none — and the initial
+ * again if the picture fails to load, so a dead URL never leaves a gap where a
+ * logo should be.
+ */
+export function Avatar({ src, name, size = 30, hue }: { src?: string | null; name: string; size?: number; hue?: number }) {
+  const [broken, setBroken] = useState(false);
+  const initial = name.trim().charAt(0).toUpperCase() || "A";
+  const style = {
+    width: size,
+    height: size,
+    ...(hue != null ? { background: `linear-gradient(135deg, hsl(${hue} 45% 30%), hsl(${hue} 60% 48%))` } : {}),
+  };
+  if (src && !broken) {
+    return (
+      <img className="avatar" style={style} src={src} alt="" referrerPolicy="no-referrer" onError={() => setBroken(true)} />
+    );
+  }
+  return (
+    <span className="avatar" style={style}>
+      {initial}
+    </span>
+  );
+}
+
+export function Card({ title, sub, right, logo, children, className = "" }: {
   title?: string;
   sub?: string;
   right?: ReactNode;
+  /** The subject's own picture, shown beside the title. */
+  logo?: ReactNode;
   children: ReactNode;
   className?: string;
 }) {
@@ -13,9 +40,12 @@ export function Card({ title, sub, right, children, className = "" }: {
     <section className={`card ${className}`}>
       {(title || right) && (
         <div className="card-head">
-          <div>
-            {title && <div className="card-title">{title}</div>}
-            {sub && <div className="card-sub">{sub}</div>}
+          <div className="card-head-main">
+            {logo}
+            <div style={{ minWidth: 0 }}>
+              {title && <div className="card-title">{title}</div>}
+              {sub && <div className="card-sub">{sub}</div>}
+            </div>
           </div>
           {right}
         </div>
