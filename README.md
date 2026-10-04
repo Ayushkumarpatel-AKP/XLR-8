@@ -286,7 +286,7 @@ Requires **Node ≥ 20** and **pnpm**. No Docker needed.
 ## Verify it
 
 ```bash
-pnpm check            # typecheck + hardcoded-data guard + 283 tests
+pnpm check            # typecheck + hardcoded-data guard + 308 tests
 pnpm verify:receipt   # real model → real leak → signed receipt → 4 verification checks
 pnpm verify:api       # the same over HTTP, including supersession
 pnpm audit:routes     # walk every route in a headless browser and fail on a dead end
@@ -609,6 +609,9 @@ agentguard receipt verify <payload>     decode a receipt and check all three sig
 agentguard receipt list [agentId]       every receipt the workspace kept, CURRENT or SUPERSEDED
 agentguard ledger [agentId]             CURRENT vs SUPERSEDED
 
+REACH
+agentguard whatsapp [--setup]           answer WhatsApp messages (needs the OpenWA gateway)
+
 SHIP
 agentguard drift check [agentId]        baseline → current (+ --from/--to manifest files)
 agentguard findings                     severity mix bar + evidence bars
@@ -702,6 +705,52 @@ A failed run leads with the reason taken from its own failure event, instead of 
 that ends in "no findings — posture within policy".
 
 Global flags: `--json` `--quiet` `--verbose` `--provider` `--config` `--output` `--local`.
+
+---
+
+## WhatsApp (optional)
+
+The robot can answer on WhatsApp, through [OpenWA](https://github.com/rmyndharis/OpenWA) — a
+self-hosted gateway. Two commands, because linking a session is a one-time act:
+
+```bash
+pnpm ag whatsapp --setup    # create + start the session, write the QR to scan, register the webhook
+pnpm ag whatsapp            # run the bridge
+```
+
+`--setup` writes `whatsapp-qr.png` into your data directory (`.agentguard/` by default); open it and
+scan with the phone you are linking. Then message the number and the robot answers, using the same
+brain the TUI uses — same tools, same engine output, same honesty about what ran.
+
+> ⚠ **Never link your main number.** OpenWA drives WhatsApp through reverse-engineered clients
+> (`whatsapp-web.js` / `baileys`), not Meta's Cloud API, and WhatsApp restricts accounts it decides
+> are automated. Its own README is blunt about it: *"There is always a non-zero risk of account
+> restriction or ban… Use a dedicated number you can afford to lose."* Use a spare SIM.
+
+**Only numbers you list get an answer.** `WHATSAPP_ALLOWED_NUMBERS` is the control, and it fails
+closed — with the list empty, nobody is answered. Matching is on the **last ten digits**, because
+the same person arrives as `918959518909@c.us`, `8959518909@s.whatsapp.net` or a mapped
+`918959518909:12@lid` and a human typing their own number leaves the country code off. Everyone else
+is ignored and logged; nothing is sent back to them.
+
+```bash
+WHATSAPP_ALLOWED_NUMBERS=8959518909,9876543210
+```
+
+**What the bridge does not do:**
+
+- It does **not** report a message as delivered. OpenWA's `201` means the gateway accepted it; there
+  is no synchronous delivery confirmation on either engine, and claiming one would be a lie.
+- It does **not** answer a group, or its own messages — either would loop.
+- It does **not** trust an unsigned delivery when `OPENWA_WEBHOOK_SECRET` is set: the HMAC is checked
+  over the **raw** body (re-serialising parsed JSON changes the bytes), a mismatch is a `401`, and a
+  retried delivery is deduplicated on `X-OpenWA-Idempotency-Key` so a hiccup does not double a reply.
+- It **does** acknowledge before it thinks. OpenWA retries a slow delivery, so the `200` goes out
+  first and the answer is computed after it — answering synchronously would send every reply twice.
+
+The whole loop is tested against a stand-in gateway in `tests/whatsapp-bridge.test.ts` — signature,
+allowlist, duplicates, groups, and the reply actually arriving — so it can be proved without linking
+a phone number to anything.
 
 ---
 

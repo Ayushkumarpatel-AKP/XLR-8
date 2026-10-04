@@ -18,6 +18,17 @@ import {
 } from "@agentguard/demo-lab";
 import { ingestedToManifest, ingestFromGitHub, serveMcpStdio, type McpToolHandler } from "@agentguard/mcp";
 import {
+  allowedNumbers,
+  ensureSession,
+  ensureWebhook,
+  getSession,
+  openwaConfig,
+  startSession,
+  sessionQr,
+  type OpenWaConfig,
+} from "./openwa.js";
+import { startBridge } from "./whatsapp.js";
+import {
   createFileLedger,
   createFileReceiptStore,
   decodeReceipt,
@@ -1500,6 +1511,147 @@ mcp
       },
     ];
     await serveMcpStdio({ name: "agentguard-x", version: "0.1.0" }, tools);
+  });
+
+// ---- whatsapp (OpenWA) ----------------------------------------------------
+/*
+ * The robot, on WhatsApp. OpenWA (a self-hosted, unofficial WhatsApp gateway)
+ * delivers a webhook per incoming message; this answers it with the same brain
+ * the TUI uses and sends the reply back.
+ *
+ * `agentguard whatsapp` runs the bridge. `agentguard whatsapp --setup` links a
+ * session first and prints the QR to scan.
+ */
+const WHATSAPP_EVENTS = ["message.received"];
+
+function requireOpenWa(): OpenWaConfig | null {
+  const cfg = openwaConfig();
+  if (cfg) return cfg;
+  process.stderr.write(
+    `${ansi.orange("!")} OpenWA is not configured. Set OPENWA_API_KEY in .env ` +
+      `(the gateway writes it to data/.api-key on first boot), plus OPENWA_BASE_URL if it is not ` +
+      `http://localhost:2785. See docs: https://github.com/rmyndharis/OpenWA\n`,
+  );
+  return null;
+}
+
+program
+  .command("whatsapp")
+  .description("answer WhatsApp messages through an OpenWA gateway the robot already runs on")
+  .option("--setup", "link the session first: create it, start it, write the QR to scan, register the webhook")
+  .option("--port <n>", "port the bridge listens on", "8790")
+  .option("--host <host>", "interface to bind", "127.0.0.1")
+  .option("--lang <lang>", "language for the robot's own sentences: en | hinglish | hi")
+  .action(async (opts: { setup?: boolean; port?: string; host?: string; lang?: string }) => {
+    const cfg = requireOpenWa();
+    if (!cfg) return;
+
+    const app = createCliApp();
+    const port = Number(opts.port ?? 8790);
+    const host = opts.host ?? "127.0.0.1";
+    const allow = allowedNumbers();
+
+    if (allow.length === 0) {
+      process.stderr.write(
+        `${ansi.orange("!")} WHATSAPP_ALLOWED_NUMBERS is empty, so the bridge would ignore every message. ` +
+          `Set it to the numbers allowed to talk to the robot (comma-separated).\n`,
+      );
+      return;
+    }
+
+    let session;
+    try {
+      session = await ensureSession(cfg);
+    } catch (err) {
+      process.stderr.write(`${ansi.red("✗")} Could not reach OpenWA: ${(err as Error).message}\n`);
+      return;
+    }
+
+    if (opts.setup) {
+      process.stdout.write(`${ansi.orange("▶")} session ${ansi.bold(session.name)} (${session.id})\n`);
+      if (session.status !== "ready") {
+        try {
+          await startSession(cfg, session.id);
+        } catch (err) {
+          process.stderr.write(`${ansi.red("✗")} start failed: ${(err as Error).message}\n`);
+          return;
+        }
+
+        // The QR appears a few seconds after start, not instantly.
+        let qr: string | null = null;
+        for (let i = 0; i < 20 && !qr; i++) {
+          await new Promise((r) => setTimeout(r, 1000));
+          qr = await sessionQr(cfg, session.id).catch(() => null);
+        }
+
+        if (qr) {
+          const file = join(app.dataDir, "whatsapp-qr.png");
+          mkdirSync(app.dataDir, { recursive: true });
+          writeFileSync(file, Buffer.from(qr.replace(/^data:image\/png;base64,/, ""), "base64"));
+          process.stdout.write(
+            `\n  ${ansi.bold("Scan this with the phone you are linking:")}\n` +
+              `  ${ansi.cyan(file)}\n\n` +
+              `  ${ansi.orange("Use a spare number, never your main one.")} OpenWA drives WhatsApp through an\n` +
+              `  unofficial client, and WhatsApp restricts accounts it decides are automated.\n\n`,
+          );
+        } else {
+          process.stdout.write(
+            `  no QR yet — open the OpenWA dashboard and scan there: ${cfg.baseUrl}\n`,
+          );
+        }
+      } else {
+        process.stdout.write(`  already linked as ${session.phone ?? "(unknown number)"}\n`);
+      }
+
+      const url = `http://${host === "0.0.0.0" ? "127.0.0.1" : host}:${port}/whatsapp`;
+      try {
+        const how = await ensureWebhook(cfg, session.id, url, WHATSAPP_EVENTS);
+        process.stdout.write(`  webhook ${how}: ${url}\n`);
+      } catch (err) {
+        process.stderr.write(`  ${ansi.red("✗")} webhook registration failed: ${(err as Error).message}\n`);
+      }
+      process.stdout.write(`\n  now run: ${ansi.cyan("pnpm ag whatsapp")}\n`);
+      return;
+    }
+
+    const current = await getSession(cfg, session.id).catch(() => session);
+    if (current.status !== "ready") {
+      process.stderr.write(
+        `${ansi.orange("!")} session "${session.name}" is ${current.status}, so nothing can be sent yet. ` +
+          `Run ${ansi.cyan("pnpm ag whatsapp --setup")} first.\n`,
+      );
+      return;
+    }
+
+    const brain = makeSession(app, opts.lang);
+    const bridge = await startBridge({
+      cfg,
+      sessionId: session.id,
+      allow,
+      port,
+      host,
+      answer: async (text) => {
+        const { lines } = await brain.ask(text);
+        return lines.map((l) => l.text).join("\n").trim();
+      },
+      log: (line) => process.stdout.write(`${ansi.gray(line)}\n`),
+    });
+
+    process.stdout.write(
+      `${ansi.bold(ansi.orange("AGENTGUARD X"))}  ·  WhatsApp bridge\n` +
+        `  listening  ${bridge.url}\n` +
+        `  session    ${session.name} (${current.phone ?? "linked"})\n` +
+        `  allowed    ${allow.join(", ")}\n` +
+        `  messages from anyone else are ignored and logged.\n` +
+        `  ${ansi.gray("ctrl-c to stop")}\n\n`,
+    );
+
+    const stop = async (): Promise<void> => {
+      await bridge.close();
+      process.exit(0);
+    };
+    process.on("SIGINT", () => void stop());
+    process.on("SIGTERM", () => void stop());
   });
 
 // ---- ask the co-pilot -----------------------------------------------------
