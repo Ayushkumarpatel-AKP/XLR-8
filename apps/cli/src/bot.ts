@@ -197,20 +197,29 @@ function faceFor(state: BotState, emotion: BotEmotion | undefined, frame: number
 /** The two face rows: full-width walls with an 11-column interior. */
 const faceRow = (inner: string): string => `█${inner}█`;
 
-/** The gap the eyes are laid out around, so they never move between faces. */
-const EYE_GAP = INNER - 2 - 4; // 11 - 2 - (two 2-wide eyes) = 5
-
 /**
- * The upper eye row. One column of air on each side keeps the white of the face
- * around the eyes; the lower row spends those two columns on the blush instead.
+ * The gap the eyes are laid out around, so they never move between faces.
+ *
+ * Four of the eleven interior columns go to the face either side of the eyes,
+ * which is what keeps them clear of the walls. Two of air on each side is the
+ * difference between a face with eyes in it and a face with eyes wedged into the
+ * corners — and in the blink row it is the difference between two dashes and two
+ * dashes touching the walls.
  */
+const EYE_GAP = INNER - 4 - 4; // 11 - (two 2-wide margins) - (two 2-wide eyes) = 3
+
+/** The upper eye row: two columns of air each side, then an eye, then the gap. */
 function eyesTop(eyeL: string, eyeR: string): string {
-  return faceRow(` ${eyeL}${" ".repeat(EYE_GAP)}${eyeR} `);
+  return faceRow(`  ${eyeL}${" ".repeat(EYE_GAP)}${eyeR}  `);
 }
 
-/** The lower eye row, with a blush mark on each cheek, under the eye corners. */
+/**
+ * The lower eye row. Its margins are a space and then the blush, so the cheek
+ * mark sits under the outer corner of the eye — one column further in than the
+ * air above it, and never against the wall.
+ */
 function eyesBottom(eyeL: string, eyeR: string): string {
-  return faceRow(`${BLUSH}${eyeL}${" ".repeat(EYE_GAP)}${eyeR}${BLUSH}`);
+  return faceRow(` ${BLUSH}${eyeL}${" ".repeat(EYE_GAP)}${eyeR}${BLUSH} `);
 }
 
 /**
