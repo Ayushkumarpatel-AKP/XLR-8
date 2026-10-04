@@ -52,7 +52,33 @@ describe("toSpeech", () => {
     const spoken = toSpeech("7 tools, 3.14 and verify_timeout_ms and __init__");
     expect(spoken).toContain("7");
     expect(spoken).toContain("3.14");
-    expect(spoken).toContain("verify_timeout_ms");
-    expect(spoken).toContain("__init__");
+    // Identifiers become words rather than one unbroken token, which is what a
+    // synthesiser can actually say.
+    expect(spoken).toContain("verify timeout ms");
+    expect(spoken).toContain("init");
+  });
+
+  it("never lets terminal art reach the synthesiser", () => {
+    const spoken = toSpeech("   ▄█████████▄\n  █ ◉◉     ◉◉ █\n ╔╤════╧═╧════╤╗\n █╧═══════════╧█");
+    expect(spoken).not.toMatch(/[█▄▀╔╗╚╝═║╤╧═▓▒░◉◠◡▁▂▃▄▅▆▇·★▸✗✓⚑]/);
+  });
+
+  it("says the symbols that carry meaning", () => {
+    const spoken = toSpeech("risk 71% and 3 agents @ 12ms, a + b = c");
+    expect(spoken).toContain("71 percent");
+    expect(spoken).toContain(" at ");
+    expect(spoken).toContain(" equals ");
+  });
+
+  it("drops emoji and stray glyphs rather than reading them", () => {
+    const spoken = toSpeech("Traps run 🔥 → 5 clean ✗ 0 leaked ⚠ none");
+    expect(spoken).not.toMatch(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u);
+    expect(spoken).toContain("Traps run");
+    expect(spoken).toContain("0 leaked");
+  });
+
+  it("does not leave a run of punctuation behind", () => {
+    expect(toSpeech("Finding......... found")).toBe("Finding. found");
+    expect(toSpeech("--- lede ---")).not.toMatch(/^[-,;:.\s]/);
   });
 });

@@ -596,9 +596,27 @@ export function toSpeech(text: string): string {
   out = out.replace(/[ \t]*[→➔➜⇒][ \t]*/g, " to ");
   out = out.replace(/[ \t]*[▸►][ \t]*/g, " ");
 
-  // Collapse whitespace and tidy the spacing before punctuation.
+  // Say the few symbols that carry meaning rather than dropping them.
+  out = out.replace(/%/g, " percent");
+  out = out.replace(/&/g, " and ");
+  out = out.replace(/@/g, " at ");
+  out = out.replace(/=/g, " equals ");
+  // Identifiers read better as words than as one unbroken token.
+  out = out.replace(/_/g, " ");
+
+  // Then everything that is not a letter, a digit or ordinary sentence
+  // punctuation goes. This is the part that matters: the terminal is full of
+  // block art, box drawing and status glyphs (█ ╔ ═ ▓ ◉ ◠ ▁ ★ ·), and a
+  // synthesiser either reads them aloud as their names or stumbles over them.
+  // A whitelist catches the ones nobody thought to blacklist.
+  out = out.replace(/[^\p{L}\p{N}\s.,;:!?'"()\-]/gu, " ");
+
+  // Collapse the gaps the removals leave, and tidy the spacing before punctuation.
   out = out.replace(/\s+/g, " ");
   out = out.replace(/\s+([,.;:!?])/g, "$1");
+  out = out.replace(/([,;:])\1+/g, "$1");
+  out = out.replace(/\.{2,}/g, ".");
+  out = out.replace(/^[\s,;:.!?-]+/, "");
   return out.trim();
 }
 

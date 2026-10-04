@@ -395,17 +395,37 @@ Press **Ctrl-O** and just talk. Nothing to hold, nothing to press to stop — it
 out when you have finished, and answers:
 
 ```
- ▄█████████▄
-█           █
-█ ◉◉     ◉◉ █   listening…
-█    ▁▁▁    █   ▂▄▇▃▆█▄
- ▀█████████▀
-  speak, then pause · Esc to stop
+    ▄█████████▄
+   █           █
+   █ ◉◉     ◉◉ █  listening… 4s
+   █    ▁▁▁    █
+  █ ▀█████████▀
+  ║╤════╧═╧════╤╗
+  ║│  ▒▓▓▓▓▓▒  │║ ▂▄▇▃▆█▄
+   ╧═══════════╧█
+   ██         ██
+  ▀▀▀         ▀▀▀
 ```
 
+A whole robot — head, torso, two arms with hands, two legs with feet — and it **does** things:
+
+- **listening** — one hand raised, a live level meter beside it, so "is it hearing me?" is answerable
+  by looking.
+- **thinking** — this is what a long turn looks like: hands shuffling, a scanner crossing its chest
+  panel, a dot travelling the track. The label says what it is doing and for how long
+  (`run traps · 12s`), so a slow answer is never mistaken for a hung one.
+- **talking** — mouth opening and closing, arms gesturing, a small voice meter.
+
+And it **reacts**, from the reply rather than a guess: a proven leak gets wide eyes and an open mouth
+(*alarmed*), a clean result gets arced eyes and a smile (*happy*), something it could not work around
+gets a flat frown (*concerned*). The reaction is held for a moment before it goes back to listening.
+
 What you said is **run straight away**, then it goes back to listening — so you can keep talking
-without touching the keyboard. The bot stays on screen and changes with what is actually happening —
-`listening…` → `transcribing…` → `checking…` → `answering…`. **Esc** leaves voice mode.
+without touching the keyboard. **Esc** leaves voice mode. On a short terminal it shows only its head.
+
+Only the model's own sentence is ever spoken, and it is cleaned first: markdown, block art, box
+drawing, arrows and emoji are removed rather than read aloud as their names, while numbers, dates and
+identifiers survive (`verify_timeout_ms` becomes "verify timeout ms", which a synthesiser can say).
 
 The detection is measured from the recording itself: a tap sounds like a click and is ignored, real
 speech followed by a pause ends the utterance. ffmpeg's `silencedetect` runs alongside it and is more

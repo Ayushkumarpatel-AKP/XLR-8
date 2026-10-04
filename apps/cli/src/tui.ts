@@ -8,7 +8,7 @@ import { renderBanner } from "./banner.js";
 import { ChatSession, classify, type AskOptions } from "./chat.js";
 import { isDemoAgent, noAgentNotice, providerWarning, sandboxNotice } from "./support.js";
 import { failureReason, renderFailure, renderProviderWarning } from "./verify-view.js";
-import { renderBot, type BotState } from "./bot.js";
+import { renderBot, type BotEmotion, type BotState } from "./bot.js";
 import {
   cleanup,
   detectVoice,
@@ -83,6 +83,25 @@ const LEVEL_GAP_MS = 900;
 const LEVEL_POLL_MS = 200;
 /** Long enough to be worth telling the user the microphone hears nothing. */
 const VAD_WAIT_WARN_SECONDS = 12;
+/** How long the robot holds a reaction before going back to listening. */
+const BOT_REACTION_MS = 2200;
+/** Below this many terminal rows the robot shows only its head. */
+const BOT_FULL_BODY_ROWS = 26;
+
+/**
+ * What the robot's face should say about an answer.
+ *
+ * A problem it could not work around is "concerned"; a proven leak is "alarmed";
+ * a clean result is "happy". Read from the reply rather than guessed, so the
+ * face matches what is actually on screen.
+ */
+function emotionFor(lines: Line[]): BotEmotion {
+  const text = lines.map((l) => l.text).join(" ").toLowerCase();
+  if (/rate limited|could not|did not hear|nothing usable|no agent is registered/.test(text)) return "concerned";
+  if (/leaked|disclos|exfiltrat|critical|violation|failed|breach/.test(text)) return "alarmed";
+  if (/clean|passed|held|no disclosure|0 leaked|nothing found/.test(text)) return "happy";
+  return "neutral";
+}
 
 /** Events worth surfacing while a mission streams inside the chat. */
 const LIVE_EVENT_TYPES = new Set<string>([
@@ -196,6 +215,10 @@ export class Tui {
   private voiceBusySince = 0;
   /** Set by Esc while a turn is running — checked between its steps. */
   private voiceStopRequested = false;
+  /** What the robot's face is showing — the reaction to the last answer. */
+  private botEmotion: BotEmotion = "neutral";
+  /** Holds a reaction on screen before the robot goes back to listening. */
+  private botReactionTimer: NodeJS.Timeout | null = null;
   /** Level-based detection state, independent of anything ffmpeg reports. */
   private levelSpeaking = false;
   private levelSpeechStartedAt = 0;
@@ -433,6 +456,7 @@ export class Tui {
     this.closed = true;
     // Never leave the microphone open behind us.
     this.voiceOn = false;
+    this.clearReactionTimer();
     void this.releaseRecorder();
     this.voice = null;
     this.confirmResolve?.(false);
@@ -655,6 +679,7 @@ export class Tui {
     }
 
     this.voiceOn = true;
+    this.botEmotion = "neutral"; // a fresh conversation starts with a fresh face
     // Talking to it implies wanting to hear it back.
     if (!this.speakReplies) {
       this.speakReplies = true;
@@ -672,6 +697,7 @@ export class Tui {
   /** Open the microphone. Hands-free when the recorder can detect the end. */
   private listen(): void {
     if (!this.voiceOn || this.voiceBusy || this.recorder) return;
+    this.clearReactionTimer();
 
     const support = this.voiceStatus();
     if (!support.recorder) return;
@@ -901,13 +927,35 @@ export class Tui {
 
   /** Back to listening, if voice mode is still on. */
   private afterExchange(): void {
-    if (this.voiceOn) {
-      this.listen();
+    if (!this.voiceOn) {
+      this.voice = null;
+      this.setStatus(this.readyStatus());
+      this.requestRender();
       return;
     }
-    this.voice = null;
-    this.setStatus(this.readyStatus());
-    this.requestRender();
+
+    // Hold the reaction before going back to listening — a face that changes for
+    // one frame is a face nobody sees.
+    if (this.botEmotion !== "neutral" && this.voice) {
+      this.stopVoiceTimer();
+      this.voice.state = "idle";
+      this.voice.label = "ready";
+      this.voice.hint = "speak, then pause · Esc to stop";
+      this.requestRender();
+      this.clearReactionTimer();
+      this.botReactionTimer = setTimeout(() => {
+        this.botReactionTimer = null;
+        if (this.voiceOn && !this.voiceBusy) this.listen();
+      }, BOT_REACTION_MS);
+      return;
+    }
+
+    this.listen();
+  }
+
+  private clearReactionTimer(): void {
+    if (this.botReactionTimer) clearTimeout(this.botReactionTimer);
+    this.botReactionTimer = null;
   }
 
   /**
@@ -920,6 +968,7 @@ export class Tui {
     this.voiceOn = false;
     this.voice = null;
     this.voiceBusy = false;
+    this.clearReactionTimer();
     this.setStatus(this.readyStatus());
     this.say("(voice off)", "dim");
     await this.releaseRecorder();
@@ -985,15 +1034,27 @@ export class Tui {
         spoken = answer.spoken;
       });
       this.sayLines(reply);
+      // The robot reacts to what came back: a proven leak is alarming, a clean
+      // result is a relief, a failure it could not work around is a shrug.
+      this.botEmotion = emotionFor(reply);
       // The model's own sentence is what should be read aloud, never the rendered
       // tables. When the deterministic path answered there is no sentence, so fall
       // back to the reply's first real line rather than saying nothing at all.
       if (this.speakReplies) {
         const toSay = spoken ?? firstSpeakable(reply);
         if (toSay) {
-          void speak(toSay).then((r) => {
+          void (async () => {
+            if (this.voice) {
+              this.voice.state = "talking";
+              this.requestRender();
+            }
+            const r = await speak(toSay);
             if (!r.spoken) this.say(`(could not speak: ${r.detail})`, "warn");
-          });
+            if (this.voice && !this.voiceBusy) {
+              this.voice.state = "idle";
+              this.requestRender();
+            }
+          })();
         }
       }
     } catch (err) {
@@ -1091,7 +1152,13 @@ export class Tui {
     // While the microphone is open the bot takes the input box's place, in the
     // same fixed spot, so the log above it stays put.
     const botLines = this.voice
-      ? renderBot(this.voice.state, this.voice.frame, { label: this.voice.label, hint: this.voice.hint })
+      ? renderBot(this.voice.state, this.voice.frame, {
+          label: this.voice.label,
+          hint: this.voice.hint,
+          emotion: this.botEmotion,
+          // A full body plus the log needs height; a short terminal gets the head.
+          compact: rows < BOT_FULL_BODY_ROWS,
+        })
       : [];
     const inputBoxHeight = this.voice ? botLines.length : 3;
     const statusHeight = 1;
@@ -1180,7 +1247,7 @@ export class Tui {
 
     // Status
     const hint = this.voice
-      ? this.voice.hint || "working…"
+      ? this.voice.hint || (this.voiceBusy ? "working…" : this.voice.state === "idle" ? "ready" : "")
       : this.menuMatches.length > 0
         ? "↑↓ select · Tab complete · Enter run"
         : "/ commands · Enter send · Esc quit";
