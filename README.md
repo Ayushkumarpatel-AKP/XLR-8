@@ -403,11 +403,11 @@ out when you have finished, and answers:
    █  ▫█   █▫  █  listening… 4s
    █ ˘██   ██˘ █
     ▀▀██▁▁▁██▀▀
-     ▖▄▄▄▄▄▄▄▗
-     █▐▒▒▒▒▒▌█    ●
-     ●▝▀▀▀▀▀▘●
+     ▖▄▄▄▄▄▄▗
+     █ ▒▒▒▒▒ █    ●
+     ●▝▀▀▀▀▘●
       ██   ██
-     ▝▀▘   ▝▀▘
+     ▝▀▘▝▀▘
 ```
 
 A whole chibi robot — a big head over a small body, two-row eyes with a highlight in each and a
