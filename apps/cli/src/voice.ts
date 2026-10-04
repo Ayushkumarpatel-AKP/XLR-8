@@ -25,12 +25,18 @@ const WAV_HEADER_BYTES = 44;
 const SPEAK_MAX_CHARS = 1200;
 /** How long a recorder gets to shut down on its own before it is killed. */
 const STOP_GRACE_MS = 3000;
+/** What ffmpeg treats as silence, and how long a gap ends an utterance. */
+const VAD_NOISE = "-35dB";
+const VAD_GAP_SECONDS = 0.9;
 /**
- * Below this RMS a recording is treated as silence — see `wavRms`. Whisper
- * answers near-silence with a plausible phrase, so every caller checks the level
- * before acting on a transcript.
+ * Below this RMS a recording is treated as silence — see `wavRms`.
+ *
+ * Deliberately the same level as `VAD_NOISE` (-35dB ≈ 0.0178): a clip that
+ * ffmpeg's voice detector calls silent must also fail this check, or a recorder
+ * without detection would let through exactly the clips the detector rejects —
+ * and Whisper answers those with a plausible phrase rather than nothing.
  */
-export const SILENCE_RMS = 0.008;
+export const SILENCE_RMS = 0.018;
 
 export interface Recorder {
   kind: "ffmpeg-dshow" | "arecord" | "sox";
@@ -174,17 +180,45 @@ export function detectVoice(): VoiceAvailability {
  * Recording
  * ------------------------------------------------------------------ */
 
+export interface VoiceRecorderOptions {
+  /**
+   * Called once the speaker has started and then stopped for long enough to call
+   * the utterance finished — the hands-free "they are done talking" signal. Only
+   * fires when the recorder can detect it (see `vad`).
+   */
+  onUtteranceEnd?: () => void;
+}
+
 export class VoiceRecorder {
   private readonly rec: Recorder;
   private readonly wavPath: string;
+  private readonly onUtteranceEnd: (() => void) | undefined;
   private child: ChildProcess | null = null;
   private startedAt = 0;
   private stoppedAt = 0;
   private spawnError: Error | null = null;
+  private heard = false;
+  private ended = false;
 
-  constructor(rec: Recorder, wavPath: string) {
+  constructor(rec: Recorder, wavPath: string, opts: VoiceRecorderOptions = {}) {
     this.rec = rec;
     this.wavPath = wavPath;
+    this.onUtteranceEnd = opts.onUtteranceEnd;
+  }
+
+  /**
+   * Whether this recorder can tell that an utterance ended by itself.
+   *
+   * Only ffmpeg does, through `silencedetect`. The others record until something
+   * stops them, so callers must fall back to a manual stop.
+   */
+  get vad(): boolean {
+    return this.rec.kind === "ffmpeg-dshow";
+  }
+
+  /** True once any speech has been detected in the current recording. */
+  get heardSpeech(): boolean {
+    return this.heard;
   }
 
   get path(): string {
@@ -208,13 +242,40 @@ export class VoiceRecorder {
       child.on("error", (err) => {
         this.spawnError = err instanceof Error ? err : new Error(String(err));
       });
-      // Drain stderr so a chatty recorder cannot block on a full pipe.
-      child.stderr?.on("data", () => undefined);
+      // stderr carries both the log we ignore and the voice-activity edges we
+      // need, so it is read rather than just drained.
+      child.stderr?.on("data", (chunk: Buffer) => this.parseVad(chunk.toString()));
       this.child = child;
       this.startedAt = Date.now();
       this.stoppedAt = 0;
     } catch (err) {
       throw new Error(`Could not start the ${this.rec.kind} recorder: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * ffmpeg's `silencedetect` reports the edges of speech on stderr:
+   *
+   *   silence_end   → the room stopped being silent: the speaker started
+   *   silence_start → the room went quiet again: the speaker stopped
+   *
+   * The first `silence_start` (before anything is said) is ignored. Once speech
+   * has been heard, the next one means the utterance is over — which is how this
+   * listens hands-free instead of asking anyone to hold a key.
+   */
+  private parseVad(text: string): void {
+    if (!this.onUtteranceEnd || this.ended) return;
+    for (const line of text.split("\n")) {
+      if (!line.includes("silence_")) continue;
+      if (line.includes("silence_end")) {
+        this.heard = true;
+        continue;
+      }
+      if (line.includes("silence_start") && this.heard) {
+        this.ended = true;
+        this.onUtteranceEnd();
+        return;
+      }
     }
   }
 
@@ -227,16 +288,23 @@ export class VoiceRecorder {
           command: this.rec.path,
           args: [
             "-hide_banner",
+            // `silencedetect` reports at info level, so error-only would hide the
+            // very signal this needs. Everything else on stderr is parsed past.
             "-loglevel",
-            "error",
+            "info",
             "-f",
             "dshow",
             "-i",
             `audio=${device}`,
+            "-af",
+            `silencedetect=noise=${VAD_NOISE}:d=${VAD_GAP_SECONDS}`,
             "-ac",
             "1",
             "-ar",
             "16000",
+            // Write as we go: a buffered file would not be readable while live.
+            "-flush_packets",
+            "1",
             "-y",
             this.wavPath,
           ],

@@ -391,8 +391,8 @@ Voice is built into the TUI. The chat box shows the key, so there is nothing to 
 ╰────────────────────────────────────────────────────────────────────╯
 ```
 
-Press **Ctrl-O**, then **hold Enter while you talk** and let go — the bot takes over the input box for
-the whole exchange, so the log above it never moves:
+Press **Ctrl-O** and just talk. Nothing to hold, nothing to press to stop — it hears you start, works
+out when you have finished, and answers:
 
 ```
  ▄█████████▄
@@ -400,12 +400,17 @@ the whole exchange, so the log above it never moves:
 █ ◉◉     ◉◉ █   listening…
 █    ▁▁▁    █   ▂▄▇▃▆█▄
  ▀█████████▀
-  hold Enter and speak · Esc cancel
+  speak, then pause · Esc to stop
 ```
 
-It changes with what is actually happening — `ready` → `listening…` → `checking…` → `answering…` —
-and what it heard is **run straight away**, the way a voice assistant should. **Esc** cancels, and if
-your terminal has key auto-repeat turned off it falls back to *press Enter to stop*.
+What you said is **run straight away**, then it goes back to listening — so you can keep talking
+without touching the keyboard. The bot stays on screen and changes with what is actually happening —
+`listening…` → `transcribing…` → `checking…` → `answering…`. **Esc** leaves voice mode.
+
+The detection is ffmpeg's `silencedetect` on the live capture: it reports the edges of speech, and the
+gap of quiet after you stop talking is what ends the utterance. No model is in that path, so it costs
+nothing but the recording itself. If a recorder cannot detect the end (or your microphone is unusual),
+it falls back to *press Enter when you are done*.
 
 Ctrl-V and F2 open the microphone too, but most terminals bind Ctrl-V to paste and never pass it on,
 which is why the box advertises Ctrl-O.
@@ -430,10 +435,11 @@ missing rather than failing obscurely, and only the model's own sentence is ever
 rendered tables.
 
 **Silence is not a command.** Whisper answers a quiet room with a plausible phrase rather than nothing
-— a near-silent clip came back as *"I'm sorry."* in one run and a lone *"."* in another. Both are
-caught before they can be acted on: the recording's real level is measured first, and a transcript with
-fewer than two letters or digits is refused. A clip that was never speech is reported as *"I did not
-hear anything in 2.6s"* instead of becoming a command.
+— a near-silent clip came back as *"I'm sorry."* in one run and a lone *"."* in another. Three things
+stop that from becoming a command you never gave: the voice detector's own verdict decides whether
+anything was said at all, the recording's level is checked against the same threshold when there is no
+detector, and a transcript with fewer than two letters or digits is refused. A clip that was never
+speech is reported as *"I did not hear anything"* instead of being run.
 
 ### Interactive UI (default)
 

@@ -70,11 +70,7 @@ const SCENARIO_KEY_SET = new Set<ScenarioKey>(SCENARIO_IDS);
  * terminal claims) is the one the chat box advertises.
  */
 const VOICE_KEYS = new Set(["\x16", "\x0f", "\x00", "\x1bOQ", "\x1b[12~"]);
-/** After the last Enter auto-repeat, treat the key as released. */
-const HOLD_RELEASE_MS = 450;
-/** How long to wait for auto-repeat before falling back to press-to-stop. */
-const HOLD_DETECT_MS = 700;
-/** Hard cap on one recording, so a stuck key cannot run forever. */
+/** Hard cap on one utterance, so a stuck microphone cannot run forever. */
 const VOICE_MAX_SECONDS = 60;
 
 /** Events worth surfacing while a mission streams inside the chat. */
@@ -151,8 +147,9 @@ export class Tui {
   private liveRun: { title: string; startedAt: number; redteamTurns: number; responses: number } | null = null;
   private confirmResolve: ((value: boolean) => void) | null = null;
   /**
-   * Set while the microphone is open or a clip is being handled. While it is
-   * set the bot takes over the input box, so the state is never ambiguous.
+   * The bot's region, set for the whole of voice mode so it is never ambiguous
+   * whether it is listening, working, or waiting. While it is set the bot takes
+   * over the input box.
    */
   private voice: {
     state: BotState;
@@ -161,19 +158,13 @@ export class Tui {
     hint: string;
     seconds: number;
     startedAt: number;
-    recorder: VoiceRecorder | null;
-    /**
-     * "ready"  — the microphone is open, waiting for Enter to be held.
-     * "hold"   — Enter is down: its auto-repeat is the only release signal a
-     *            terminal gives us, so the last repeat we saw means "still held".
-     * "toggle" — auto-repeat is off, so the next Enter press stops instead.
-     * "busy"   — the clip is being handled; keys are ignored.
-     */
-    mode: "ready" | "hold" | "toggle" | "busy";
-    enterRepeats: number;
-    lastEnterAt: number;
-    maxSeconds: number;
   } | null = null;
+  /** Voice mode is engaged: keep listening until it is turned off. */
+  private voiceOn = false;
+  /** The live capture — only set while actually listening. */
+  private recorder: VoiceRecorder | null = null;
+  /** A clip is being transcribed or answered, so the microphone is closed. */
+  private voiceBusy = false;
   private voiceTimer: NodeJS.Timeout | null = null;
   private voiceSupport: VoiceAvailability | null = null;
   /** Whether replies are also read aloud. Toggled with `/voice speak`. */
@@ -405,15 +396,9 @@ export class Tui {
     if (this.closed) return;
     this.closed = true;
     // Never leave the microphone open behind us.
-    this.stopVoiceTimer();
-    if (this.voice?.recorder) {
-      const path = this.voice.recorder.path;
-      void this.voice.recorder
-        .stop()
-        .catch(() => undefined)
-        .finally(() => cleanup(path));
-      this.voice = null;
-    }
+    this.voiceOn = false;
+    void this.releaseRecorder();
+    this.voice = null;
     this.confirmResolve?.(false);
     this.confirmResolve = null;
     this.resolveExit?.();
@@ -509,24 +494,19 @@ export class Tui {
     }
     // While the microphone is open the only keys that mean anything are the ones
     // that work it — everything else would land in the input box behind the bot.
-    if (this.voice) {
-      const v = this.voice;
-      if (v.mode === "busy") return;
-      if (chunk === "\x1b" || chunk === "\x03") return void this.cancelVoice();
-      if (VOICE_KEYS.has(chunk)) return void this.stopVoice();
-      // Enter only means "talk" while the microphone is already open. Outside
-      // voice it still sends the message, which is why this is not in the switch
-      // below.
-      if (chunk === "\r" || chunk === "\n") {
-        if (v.mode === "toggle") return void this.stopVoice();
-        v.mode = "hold";
-        v.enterRepeats++;
-        v.lastEnterAt = Date.now();
-        return;
+    if (this.voiceOn) {
+      if (chunk === "\x1b" || chunk === "\x03") return void this.exitVoice();
+      // While a clip is being handled there is nothing to say — and Enter must not
+      // fall through to sending an empty message.
+      if (this.voiceBusy) return;
+      // Enter is only "I'm done talking" inside voice mode. Outside it, it still
+      // sends the message, which is why this is not in the switch below.
+      if (chunk === "\r" || chunk === "\n" || VOICE_KEYS.has(chunk)) {
+        return void this.finishListening("manual");
       }
       return;
     }
-    if (VOICE_KEYS.has(chunk)) return void this.startVoice();
+    if (VOICE_KEYS.has(chunk)) return void this.toggleVoice();
     switch (chunk) {
       case "\x1b[A":
         return this.moveMenu(-1);
@@ -610,11 +590,14 @@ export class Tui {
   }
 
   /**
-   * Open the microphone. The bot takes over the input box for the whole exchange,
-   * so it is obvious whether it is hearing you, working, or done.
+   * Turn voice mode on or off.
+   *
+   * On: the microphone opens and stays open. Speak whenever you like — it works
+   * out for itself when you have finished, answers, and starts listening again.
+   * Off: everything stops.
    */
-  async startVoice(): Promise<void> {
-    if (this.voice || this.busy) return;
+  async toggleVoice(): Promise<void> {
+    if (this.voiceOn) return void this.exitVoice();
 
     const support = this.voiceStatus();
     if (!support.recorder) {
@@ -626,28 +609,46 @@ export class Tui {
       return;
     }
 
+    this.voiceOn = true;
+    this.say(
+      support.recorder.kind === "ffmpeg-dshow"
+        ? "  listening — just speak, then pause. Esc to stop."
+        : "  listening — this recorder cannot tell when you stop, so press Enter when you are done.",
+      "dim",
+    );
+    this.listen();
+  }
+
+  /** Open the microphone. Hands-free when the recorder can detect the end. */
+  private listen(): void {
+    if (!this.voiceOn || this.voiceBusy || this.recorder) return;
+
+    const support = this.voiceStatus();
+    if (!support.recorder) return;
+
     const wavPath = join(tmpdir(), `agentguard-voice-${Date.now()}.wav`);
-    const recorder = new VoiceRecorder(support.recorder, wavPath);
+    const recorder = new VoiceRecorder(support.recorder, wavPath, {
+      // ffmpeg tells us the speaker has finished — the whole point of hands-free.
+      onUtteranceEnd: () => void this.finishListening("heard"),
+    });
     try {
       recorder.start();
     } catch (err) {
+      this.voiceOn = false;
       this.say(`Could not start the microphone: ${(err as Error).message}`, "err");
       return;
     }
+    this.recorder = recorder;
 
     this.voice = {
       state: "listening",
       frame: 0,
       label: "listening…",
-      hint: "hold Enter and speak · Esc cancel",
+      hint: recorder.vad ? "speak, then pause · Esc to stop" : "press Enter when done · Esc to stop",
       seconds: 0,
       startedAt: Date.now(),
-      recorder,
-      mode: "ready",
-      enterRepeats: 0,
-      lastEnterAt: Date.now(),
-      maxSeconds: VOICE_MAX_SECONDS,
     };
+    this.stopVoiceTimer();
     this.voiceTimer = setInterval(() => this.voiceTick(), 120);
     this.setStatus("listening");
     this.requestRender();
@@ -658,125 +659,139 @@ export class Tui {
     this.voiceTimer = null;
   }
 
-  /**
-   * Runs while the microphone is open.
-   *
-   * A terminal sends key PRESSES only — there is no key-up event — so
-   * push-to-talk is built out of Enter's auto-repeat: while the key is held we
-   * keep receiving "\r", and the moment they stop arriving the key was released.
-   * If the terminal has auto-repeat off we never see a second one, so rather than
-   * stopping the instant it began we fall back to press-Enter-to-stop.
-   */
   private voiceTick(): void {
     const v = this.voice;
-    if (!v?.recorder) return;
-
+    if (!v) return;
     v.seconds = (Date.now() - v.startedAt) / 1000;
     v.frame++;
-    const now = Date.now();
-
-    if (v.mode === "hold") {
-      if (v.enterRepeats >= 2 && now - v.lastEnterAt > HOLD_RELEASE_MS) {
-        // The repeats stopped: the key was released.
-        void this.stopVoice();
-        return;
-      }
-      if (v.enterRepeats < 2 && now - v.lastEnterAt > HOLD_DETECT_MS) {
-        // Only one press, so this terminal has auto-repeat off — we cannot tell a
-        // hold from a tap, so ask for a second press rather than cutting them off.
-        v.mode = "toggle";
-        v.hint = "Enter to stop · Esc cancel";
-      }
-    }
-
-    if (v.seconds > v.maxSeconds) {
-      void this.stopVoice();
+    // A stuck recording still has to end. Silence after the cap is discarded, so
+    // this costs nothing but bounds the buffer.
+    if (v.seconds > VOICE_MAX_SECONDS) {
+      void this.finishListening("timeout");
       return;
     }
-
     v.label = `listening… ${Math.floor(v.seconds)}s`;
     this.requestRender();
   }
 
-  /** Enter (released) or the mic key again: transcribe, then run what was said. */
-  async stopVoice(): Promise<void> {
-    const current = this.voice;
-    if (!current || current.mode === "busy" || !current.recorder) return;
-
+  private async releaseRecorder(): Promise<void> {
+    const recorder = this.recorder;
+    this.recorder = null;
     this.stopVoiceTimer();
-    current.mode = "busy";
-    current.state = "thinking";
-    current.label = "transcribing…";
-    current.hint = "";
-    this.requestRender();
+    if (!recorder) return;
+    try {
+      await recorder.stop();
+    } catch {
+      /* already gone */
+    }
+    cleanup(recorder.path);
+  }
 
-    const wavPath = current.recorder.path;
+  /**
+   * The utterance is over, or the user said so. Transcribe it and run it.
+   *
+   * "heard" means ffmpeg saw speech, so the clip is used as-is. "manual" and
+   * "timeout" might be nothing but room noise, so they are level-checked first.
+   */
+  private async finishListening(reason: "heard" | "manual" | "timeout"): Promise<void> {
+    const recorder = this.recorder;
+    if (!recorder || this.voiceBusy) return;
+
+    this.voiceBusy = true;
+    this.recorder = null;
+    this.stopVoiceTimer();
+
+    // Read the detector's verdict BEFORE stopping the process.
+    const hasVad = recorder.vad;
+    const vadHeard = recorder.heardSpeech;
+
+    const wavPath = recorder.path;
     let taken: { path: string; seconds: number };
     try {
-      taken = await current.recorder.stop();
+      taken = await recorder.stop();
     } catch (err) {
       cleanup(wavPath);
-      this.voice = null;
-      this.setStatus(this.readyStatus());
+      this.voiceBusy = false;
       this.say(`Recording failed: ${(err as Error).message}`, "err");
+      this.afterExchange();
       return;
     }
 
-    // Whisper answers near-silence with a plausible phrase rather than nothing —
-    // a quiet room produced "I'm sorry." in testing. Check the level first so a
-    // clip that was never speech is never acted on.
-    const level = await wavRms(taken.path);
-    if (level < SILENCE_RMS) {
+    // Whisper answers near-silence with something plausible rather than nothing —
+    // a quiet room produced "I'm sorry." in one run and a lone "." in another, and
+    // a level check alone let a hallucinated phrase through when the room sat just
+    // above it. When the recorder has a real voice detector, its verdict wins.
+    const silent = hasVad ? !vadHeard : (await wavRms(taken.path)) < SILENCE_RMS;
+    if (silent) {
       cleanup(taken.path);
-      this.voice = null;
-      this.setStatus(this.readyStatus());
-      this.say(`I did not hear anything in ${taken.seconds.toFixed(1)}s. Try again, closer to the mic.`, "warn");
+      this.voiceBusy = false;
+      if (reason === "manual") this.say("I did not hear anything — speak and it will answer.", "warn");
+      this.afterExchange();
       return;
     }
 
-    current.label = "checking…";
+    if (this.voice) {
+      this.voice.state = "thinking";
+      this.voice.label = "transcribing…";
+      this.voice.hint = "";
+    }
     this.requestRender();
 
+    let said = "";
     try {
-      const { text } = await transcribe(taken.path);
-      cleanup(taken.path);
-      this.voice = null;
-      const said = text.trim();
-      if (!isUsableTranscript(said)) {
-        // Whisper answers a speechless clip with something plausible — a lone "."
-        // showed up in testing and would otherwise have become a command.
-        this.say(`That came through as nothing usable${said ? ` (${JSON.stringify(said)})` : ""} — try again.`, "warn");
-      } else {
-        // Straight through: you spoke, so it runs. The words are echoed into the
-        // log first so it is still clear what was heard.
-        this.say(`  you said: ${said}`, "dim");
-        this.input = said;
-        void this.submit();
-      }
+      said = (await transcribe(taken.path)).text.trim();
     } catch (err) {
       cleanup(taken.path);
-      this.voice = null;
+      this.voiceBusy = false;
       this.say((err as Error).message, "err");
+      this.afterExchange();
+      return;
     }
+    cleanup(taken.path);
+
+    if (!isUsableTranscript(said)) {
+      this.voiceBusy = false;
+      this.say(`That came through as nothing usable${said ? ` (${JSON.stringify(said)})` : ""}.`, "warn");
+      this.afterExchange();
+      return;
+    }
+
+    // Straight through: you spoke, so it runs.
+    this.say(`  you said: ${said}`, "dim");
+    if (this.voice) {
+      this.voice.label = "checking…";
+      this.requestRender();
+    }
+    this.input = said;
+    await this.submit();
+    this.voiceBusy = false;
+    this.afterExchange();
+  }
+
+  /** Back to listening, if voice mode is still on. */
+  private afterExchange(): void {
+    if (this.voiceOn) {
+      this.listen();
+      return;
+    }
+    this.voice = null;
     this.setStatus(this.readyStatus());
     this.requestRender();
   }
 
-  /** Esc: drop the recording without using it. */
-  async cancelVoice(): Promise<void> {
-    const current = this.voice;
-    this.stopVoiceTimer();
+  /**
+   * Esc: leave voice mode, dropping any recording.
+   *
+   * The screen is cleared first and the recorder shut down after: letting go of
+   * ffmpeg can take a moment, and Esc should feel instant.
+   */
+  async exitVoice(): Promise<void> {
+    this.voiceOn = false;
     this.voice = null;
+    this.voiceBusy = false;
     this.setStatus(this.readyStatus());
-    if (current?.recorder) {
-      try {
-        await current.recorder.stop();
-      } catch {
-        /* already gone */
-      }
-      cleanup(current.recorder.path);
-    }
-    this.say("(voice cancelled)", "dim");
+    this.say("(voice off)", "dim");
+    await this.releaseRecorder();
   }
 
   private async submit(): Promise<void> {
@@ -1025,11 +1040,7 @@ export class Tui {
 
     // Status
     const hint = this.voice
-      ? this.voice.mode === "busy"
-        ? "working…"
-        : this.voice.mode === "toggle"
-          ? "Enter to stop · Esc cancel"
-          : "hold Enter and speak · Esc cancel"
+      ? this.voice.hint || "working…"
       : this.menuMatches.length > 0
         ? "↑↓ select · Tab complete · Enter run"
         : "/ commands · Enter send · Esc quit";
@@ -1054,7 +1065,7 @@ function buildCommands(): SlashCommand[] {
       description: "talk instead of typing (Ctrl-O; Ctrl-V and F2 work too) — `speak` reads replies aloud",
       run(arg, app) {
         if (arg.trim() === "speak") app.toggleSpeak();
-        void app.startVoice();
+        void app.toggleVoice();
       },
     },
     {
