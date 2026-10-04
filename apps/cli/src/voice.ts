@@ -17,6 +17,7 @@ import { readFile } from "node:fs/promises";
 import { loadDotEnv } from "@agentguard/model-router";
 import type { Line } from "./kind.js";
 import { LANG_LABEL, speechVoicesFor, type Lang } from "./language.js";
+import { murfConfigured, murfSpeak, murfVoiceFor } from "./murf.js";
 
 const GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 const WHISPER_MODEL = "whisper-large-v3-turbo";
@@ -117,6 +118,14 @@ function listDshowAudioDevices(ffmpegPath: string): string[] {
 /** Is a usable text-to-speech path present on this platform? */
 function detectSpeak(): { ok: boolean; detail: string } {
   const platform = process.platform;
+
+  // Say which voice replies will actually use, so "it sounds different" is
+  // never a mystery.
+  if (murfConfigured()) {
+    const voices = (["en", "hinglish", "hi"] as const).map((l) => `${l}→${murfVoiceFor(l)}`).join(", ");
+    return { ok: true, detail: `Murf AI is configured and speaks replies (${voices}); the platform engine is the fallback.` };
+  }
+
   if (platform === "win32") {
     const ps = which("powershell") ?? which("pwsh");
     if (ps) return { ok: true, detail: "Speech output is available via Windows SAPI (System.Speech) through PowerShell." };
@@ -743,6 +752,16 @@ export async function speak(text: string, lang: Lang = "en"): Promise<{ spoken: 
   const spokenText = truncated ? `${phrase.slice(0, SPEAK_MAX_CHARS).trimEnd()} ...` : phrase;
   const timeoutMs = speakTimeout(spokenText);
 
+  // Murf first when a key is configured: it is the better voice. It is never the
+  // only one — a missing key, an empty balance, a rate limit or a failed download
+  // all come back unspoken, and the platform engine below still says the line.
+  let murfNote = "";
+  if (murfConfigured()) {
+    const viaMurf = await murfSpeak(spokenText, lang);
+    if (viaMurf.spoken) return viaMurf;
+    murfNote = `${viaMurf.detail} Falling back to the platform voice. `;
+  }
+
   if (process.platform === "win32") {
     const ps = speechShell();
     if (!ps) return { spoken: false, detail: "Windows SAPI text-to-speech is unavailable (no PowerShell found)." };
@@ -770,7 +789,10 @@ export async function speak(text: string, lang: Lang = "en"): Promise<{ spoken: 
     const ok = await runWithStdin(ps, ["-NoProfile", "-NonInteractive", "-Command", script], spokenText, timeoutMs);
     if (!ok) return { spoken: false, detail: "Windows SAPI text-to-speech failed to run." };
     const via = wanted.length > 0 ? `Windows SAPI (${LANG_LABEL[lang]})` : "Windows SAPI";
-    return { spoken: true, detail: truncated ? `Spoken via ${via} (text truncated).` : `Spoken via ${via}.` };
+    return {
+      spoken: true,
+      detail: `${murfNote}${truncated ? `Spoken via ${via} (text truncated).` : `Spoken via ${via}.`}`,
+    };
   }
 
   if (process.platform === "darwin") {
@@ -778,7 +800,10 @@ export async function speak(text: string, lang: Lang = "en"): Promise<{ spoken: 
     if (!say) return { spoken: false, detail: "macOS `say` was not found on PATH." };
     const ok = await runWithArgs(say, [spokenText], timeoutMs);
     if (!ok) return { spoken: false, detail: "macOS `say` failed to run." };
-    return { spoken: true, detail: truncated ? "Spoken via `say` (text truncated)." : "Spoken via `say`." };
+    return {
+      spoken: true,
+      detail: `${murfNote}${truncated ? "Spoken via `say` (text truncated)." : "Spoken via `say`."}`,
+    };
   }
 
   const spd = which("spd-say");
@@ -789,7 +814,10 @@ export async function speak(text: string, lang: Lang = "en"): Promise<{ spoken: 
   }
   const ok = await runWithArgs(engine.path, [spokenText], timeoutMs);
   if (!ok) return { spoken: false, detail: `${engine.name} failed to run.` };
-  return { spoken: true, detail: truncated ? `Spoken via ${engine.name} (text truncated).` : `Spoken via ${engine.name}.` };
+  return {
+    spoken: true,
+    detail: `${murfNote}${truncated ? `Spoken via ${engine.name} (text truncated).` : `Spoken via ${engine.name}.`}`,
+  };
 }
 
 /** Remove a temp file, ignoring errors. */

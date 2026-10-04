@@ -23,6 +23,7 @@
     "inspect-layout": "tsx scripts/inspect-layout.ts",
     "audit:routes": "tsx scripts/audit-routes.ts",
     "screenshots": "tsx scripts/screenshots.ts",
+    "voice:samples": "tsx scripts/voice-samples.ts",
     "tui:preview": "tsx scripts/preview-tui.ts",
     "agentguard": "tsx apps/cli/src/index.ts",
     "ag": "tsx apps/cli/src/index.ts",

@@ -286,11 +286,12 @@ Requires **Node ≥ 20** and **pnpm**. No Docker needed.
 ## Verify it
 
 ```bash
-pnpm check            # typecheck + hardcoded-data guard + 276 tests
+pnpm check            # typecheck + hardcoded-data guard + 283 tests
 pnpm verify:receipt   # real model → real leak → signed receipt → 4 verification checks
 pnpm verify:api       # the same over HTTP, including supersession
 pnpm audit:routes     # walk every route in a headless browser and fail on a dead end
 pnpm screenshots      # recapture docs/screenshots from the running app
+pnpm voice:samples    # render the robot's candidate voices to pick one by ear (needs Murf)
 ```
 
 `audit:routes` visits all fourteen routes with an **empty workspace** — the state nobody tries by
@@ -497,16 +498,33 @@ scenario ids and commands stay exactly as the engine produced them — the promp
 because a translated number is a wrong number and a translated quote is no longer evidence. The
 rendered output underneath is untouched, as you can see above.
 
-Spoken replies use a voice for the language where one is installed: on Windows, `Microsoft Hemant` /
-`Kalpana` for Devanagari and `Microsoft Heera` / `Ravi` (Indian English) for romanised Hinglish. If no
-Hindi voice is installed, Devanagari falls back to romanised Hinglish rather than being read out by an
-American voice. `agentguard doctor` reports which voice a reply would use.
+**Speech out is Murf when you have a key, and the platform voice when you do not.** Set
+`MURF_API_KEY` and replies are spoken by [Murf AI](https://murf.ai/api); with no key, or when Murf
+cannot answer, the platform engine takes over — Windows SAPI, macOS `say`, or `spd-say`/`espeak` on
+Linux. A fallback is never silent about itself: the reason is reported with the line.
 
-Speech in is transcribed by Whisper on the provider you already configured; speech out uses the
-platform's own voice (SAPI on Windows, `say` on macOS, `spd-say`/`espeak` on Linux). On Windows,
-recording needs `ffmpeg` on PATH. `agentguard voice` checks all of this up front and tells you what is
-missing rather than failing obscurely, and only the model's own sentence is ever read aloud — never the
-rendered tables.
+Three things make the voice fit the language rather than approximating it:
+
+| Mode | Voice | Why |
+| --- | --- | --- |
+| `--lang en` | `en-US-cooper` | young adult, conversational |
+| `--lang hinglish` | `en-IN-rohan` | Indian English — romanised Hindi read correctly, not with an American accent |
+| `--lang hi` | `hi-IN-amit` | actually speaks Hindi |
+
+`MURF_VOICE_EN` / `_HINGLISH` / `_HI` override any of them, and `pnpm voice:samples` renders the
+candidates to `.agentguard/voice-samples` so the choice can be made by ear instead of by reading a
+catalogue. The platform voices are chosen per language the same way — `Microsoft Hemant` / `Kalpana`
+for Devanagari, `Microsoft Heera` / `Ravi` for Hinglish — and `agentguard doctor` reports which voice
+a reply would use.
+
+**Murf is metered in characters, and the allowance does not renew**, so each reply is cached by
+`(voice, text)` and a repeated line is never billed twice; when the balance runs out the API says so
+and the robot switches back to the platform voice rather than going quiet.
+
+Speech in is transcribed by Whisper on the provider you already configured. On Windows, recording
+needs `ffmpeg` on PATH (which also provides `ffplay`, used to play Murf's audio). `agentguard voice`
+checks all of this up front and tells you what is missing rather than failing obscurely, and only the
+model's own sentence is ever read aloud — never the rendered tables.
 
 **Silence is not a command.** Whisper answers a quiet room with a plausible phrase rather than nothing
 — a near-silent clip came back as *"I'm sorry."* in one run and a lone *"."* in another. Three things
