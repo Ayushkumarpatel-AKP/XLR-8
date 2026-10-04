@@ -397,8 +397,8 @@ out when you have finished, and answers:
 ```
          ●
     ▄▄███╵███▄▄
-   █ ▫██   ██▫ █  listening… 4s
-   █˘███   ███˘█
+   █ ▫█     █▫ █  listening… 4s
+   █˘██     ██˘█
     ▀▀██▁▁▁██▀▀
      ▖▄▄▄▄▄▄▄▗
      █▐▒▒▒▒▒▌█    ●
@@ -407,9 +407,9 @@ out when you have finished, and answers:
      ▝▀▘   ▝▀▘
 ```
 
-A whole chibi robot — a big head over a small body, two-row eyes with a highlight in each, blush on
-its cheeks, an antenna whose tip light reports what it is doing, stubby arms ending in ball hands and
-little feet.
+A whole chibi robot — a big head over a small body, wide-set two-row eyes with a highlight in each,
+blush on its cheeks, an antenna whose tip light reports what it is doing, stubby arms ending in ball
+hands and little feet.
 
 It **does** things:
 
@@ -426,10 +426,10 @@ It **does** things:
 And it **reacts**, from the reply rather than a guess:
 
 ```
-alarmed    ! ◉◉◉   ◉◉◉ !     a trap proved a leak   (wide ringed eyes, o-mouth)
-happy      ✦ ◠◠◠   ◠◠◠ ♥     a clean result         (arced eyes, a smile, a heart)
-concerned    ▄██   ██▄ ,     something it could not work around (a sweat drop)
-focused      ▄▄▄   ▄▄▄       while working
+alarmed    ! ◉◉     ◉◉ !     a trap proved a leak   (wide ringed eyes, o-mouth)
+happy      ✦ ◠◠     ◠◠ ♥     a clean result         (arced eyes, a smile, a heart)
+concerned    ▄█     █▄ ,     something it could not work around (a sweat drop)
+focused      ▄▄     ▄▄       while working
 ```
 
 The props live in the margins, so no emotion ever changes the figure's size, and the reaction is held

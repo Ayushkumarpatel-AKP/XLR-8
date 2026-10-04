@@ -119,9 +119,13 @@ const BLUSH = "˘";
 /* ------------------------------------------------------------------ *
  * Faces
  *
- * Every eye is three columns wide and two rows tall, and every mouth is three
+ * Every eye is two columns wide and two rows tall, and every mouth is three
  * columns, so swapping a face never changes the size of the head. `top` is the
  * upper row of the eyes (where the highlight lives) and `bottom` the lower.
+ *
+ * Two columns rather than three: a wider block reads as bezels rather than eyes
+ * once the head around it is only thirteen columns. `EYE_GAP` absorbs the
+ * difference, so every row below stays exactly as wide as it was.
  * ------------------------------------------------------------------ */
 
 interface Face {
@@ -131,22 +135,22 @@ interface Face {
 }
 
 /** Both eyes squeezed shut for a single frame: a line where the eyes were. */
-const BLINK: readonly [string, string] = ["   ", "───"];
+const BLINK: readonly [string, string] = ["  ", "──"];
 /** Lids down: the upper row is a lid, the lower a slit. Narrowed, still awake. */
-const NARROW: readonly [string, string] = ["▄▄▄", "───"];
+const NARROW: readonly [string, string] = ["▄▄", "──"];
 
 const EMOTION_FACE: Record<BotEmotion, Face> = {
-  neutral: { eyeL: ["▫██", "███"], eyeR: ["██▫", "███"], mouth: "▁▁▁" }, // a bright pixel in each
-  happy: { eyeL: ["◠◠◠", "   "], eyeR: ["◠◠◠", "   "], mouth: "◡◡◡" }, // squeezed into arcs
-  concerned: { eyeL: ["▄██", "███"], eyeR: ["██▄", "███"], mouth: "▂▂▂" }, // outer lids drooping
-  alarmed: { eyeL: ["◉◉◉", "◉◉◉"], eyeR: ["◉◉◉", "◉◉◉"], mouth: " ◯ " }, // wide, ringed, o-mouth
+  neutral: { eyeL: ["▫█", "██"], eyeR: ["█▫", "██"], mouth: "▁▁▁" }, // a bright pixel in each
+  happy: { eyeL: ["◠◠", "  "], eyeR: ["◠◠", "  "], mouth: "◡◡◡" }, // squeezed into arcs
+  concerned: { eyeL: ["▄█", "██"], eyeR: ["█▄", "██"], mouth: "▂▂▂" }, // outer lids drooping
+  alarmed: { eyeL: ["◉◉", "◉◉"], eyeR: ["◉◉", "◉◉"], mouth: " ◯ " }, // wide, ringed, o-mouth
   focused: { eyeL: NARROW, eyeR: NARROW, mouth: "───" },
 };
 
 /** The face a state wears when the caller has no opinion about its mood. */
 const STATE_FACE: Record<BotState, Face> = {
   idle: EMOTION_FACE.neutral,
-  listening: { eyeL: ["░██", "███"], eyeR: ["██░", "███"], mouth: "◡◡◡" }, // lit wide
+  listening: { eyeL: ["░█", "██"], eyeR: ["█░", "██"], mouth: "◡◡◡" }, // lit wide
   thinking: EMOTION_FACE.focused,
   talking: EMOTION_FACE.neutral, // the mouth carries the motion here
 };
@@ -194,7 +198,7 @@ function faceFor(state: BotState, emotion: BotEmotion | undefined, frame: number
 const faceRow = (inner: string): string => `█${inner}█`;
 
 /** The gap the eyes are laid out around, so they never move between faces. */
-const EYE_GAP = INNER - 2 - 6; // 11 - 2 - (two 3-wide eyes) = 3
+const EYE_GAP = INNER - 2 - 4; // 11 - 2 - (two 2-wide eyes) = 5
 
 /**
  * The upper eye row. One column of air on each side keeps the white of the face
