@@ -18,6 +18,7 @@ import {
   transcribe,
   VoiceRecorder,
   wavRms,
+  wavTailRms,
   type VoiceAvailability,
 } from "./voice.js";
 import { join } from "node:path";
@@ -72,6 +73,16 @@ const SCENARIO_KEY_SET = new Set<ScenarioKey>(SCENARIO_IDS);
 const VOICE_KEYS = new Set(["\x16", "\x0f", "\x00", "\x1bOQ", "\x1b[12~"]);
 /** Hard cap on one utterance, so a stuck microphone cannot run forever. */
 const VOICE_MAX_SECONDS = 60;
+/**
+ * Our own voice detection, measured from the recorder's output. Mirrors what the
+ * recorder's detector uses, so the two agree about the same utterance.
+ */
+const LEVEL_MIN_SPEECH_MS = 400;
+const LEVEL_GAP_MS = 900;
+/** How often the output is measured while listening. */
+const LEVEL_POLL_MS = 200;
+/** Long enough to be worth telling the user the microphone hears nothing. */
+const VAD_WAIT_WARN_SECONDS = 12;
 
 /** Events worth surfacing while a mission streams inside the chat. */
 const LIVE_EVENT_TYPES = new Set<string>([
@@ -85,6 +96,20 @@ const LIVE_EVENT_TYPES = new Set<string>([
 ]);
 
 export { visibleLength, fit, wrap };
+
+/**
+ * The first line of a reply worth reading aloud, used when the model did not
+ * supply a sentence of its own. Skips the dim scaffolding and raw renders.
+ */
+export function firstSpeakable(lines: Line[]): string | null {
+  const usable = lines.find(
+    (l) =>
+      !l.raw &&
+      l.text.trim().length > 0 &&
+      (l.kind === "accent" || l.kind === "info" || l.kind === "ok" || l.kind === "warn" || l.kind === "err"),
+  );
+  return usable ? usable.text.trim() : null;
+}
 
 /**
  * Adapt a shared `verify-view` renderer (which returns pre-coloured terminal
@@ -166,6 +191,12 @@ export class Tui {
   /** A clip is being transcribed or answered, so the microphone is closed. */
   private voiceBusy = false;
   private voiceTimer: NodeJS.Timeout | null = null;
+  /** Level-based detection state, independent of anything ffmpeg reports. */
+  private levelSpeaking = false;
+  private levelSpeechStartedAt = 0;
+  private levelSilentSince = 0;
+  private levelPolling = false;
+  private lastPolledAt = 0;
   private voiceSupport: VoiceAvailability | null = null;
   /** Whether replies are also read aloud. Toggled with `/voice speak`. */
   private speakReplies = false;
@@ -610,6 +641,11 @@ export class Tui {
     }
 
     this.voiceOn = true;
+    // Talking to it implies wanting to hear it back.
+    if (!this.speakReplies) {
+      this.speakReplies = true;
+      this.say("  spoken replies on — `/voice speak` to turn them off.", "dim");
+    }
     this.say(
       support.recorder.kind === "ffmpeg-dshow"
         ? "  listening — just speak, then pause. Esc to stop."
@@ -639,6 +675,9 @@ export class Tui {
       return;
     }
     this.recorder = recorder;
+    this.levelSpeaking = false;
+    this.levelSpeechStartedAt = 0;
+    this.levelSilentSince = 0;
 
     this.voice = {
       state: "listening",
@@ -670,8 +709,64 @@ export class Tui {
       void this.finishListening("timeout");
       return;
     }
+
+    // Measure the output ourselves, alongside whatever the recorder reported.
+    const recorder = this.recorder;
+    if (recorder && !this.levelPolling && Date.now() - this.lastPolledAt >= LEVEL_POLL_MS) {
+      this.levelPolling = true;
+      this.lastPolledAt = Date.now();
+      void wavTailRms(recorder.path)
+        .then((level) => this.applyLevel(level))
+        .catch(() => undefined)
+        .finally(() => {
+          this.levelPolling = false;
+        });
+    }
+
+    // Say what the microphone is actually doing, so "is it hearing me?" can be
+    // answered by looking rather than by guessing.
+    if (recorder) {
+      if (recorder.heardSpeech || this.levelSpeaking) {
+        v.hint = "hearing you · Esc to stop";
+      } else if (v.seconds > VAD_WAIT_WARN_SECONDS) {
+        v.hint = "nothing heard yet — is the mic picking you up? · Esc to stop";
+      } else {
+        v.hint = "speak, then pause · Esc to stop";
+      }
+    }
+
     v.label = `listening… ${Math.floor(v.seconds)}s`;
     this.requestRender();
+  }
+
+  /**
+   * Decide from the recording's own level whether an utterance has finished.
+   *
+   * Runs alongside the recorder's detector rather than instead of it — whichever
+   * notices first ends the turn. Anything too short to be speech is ignored, so a
+   * fan, a door or a keypress does not start one.
+   */
+  private applyLevel(level: number): void {
+    if (!this.voiceOn || this.voiceBusy || !this.recorder) return;
+    const now = Date.now();
+
+    if (level >= SILENCE_RMS) {
+      if (!this.levelSpeaking) {
+        this.levelSpeaking = true;
+        this.levelSpeechStartedAt = now;
+      }
+      this.levelSilentSince = 0;
+      return;
+    }
+
+    if (!this.levelSpeaking) return;
+    if (this.levelSilentSince === 0) this.levelSilentSince = now;
+    if (now - this.levelSilentSince < LEVEL_GAP_MS) return;
+
+    const spokeFor = this.levelSilentSince - this.levelSpeechStartedAt;
+    this.levelSpeaking = false;
+    this.levelSilentSince = 0;
+    if (spokeFor >= LEVEL_MIN_SPEECH_MS) void this.finishListening("heard");
   }
 
   private async releaseRecorder(): Promise<void> {
@@ -701,9 +796,11 @@ export class Tui {
     this.recorder = null;
     this.stopVoiceTimer();
 
-    // Read the detector's verdict BEFORE stopping the process.
-    const hasVad = recorder.vad;
+    // Read the detector's verdict BEFORE stopping the process. It only counts as
+    // usable if it actually reported something — a detector that never fired
+    // would otherwise veto every utterance the user ended by hand.
     const vadHeard = recorder.heardSpeech;
+    const vadUsable = recorder.vad && (recorder.vadActive || reason === "heard");
 
     const wavPath = recorder.path;
     let taken: { path: string; seconds: number };
@@ -721,7 +818,7 @@ export class Tui {
     // a quiet room produced "I'm sorry." in one run and a lone "." in another, and
     // a level check alone let a hallucinated phrase through when the room sat just
     // above it. When the recorder has a real voice detector, its verdict wins.
-    const silent = hasVad ? !vadHeard : (await wavRms(taken.path)) < SILENCE_RMS;
+    const silent = vadUsable ? !vadHeard : (await wavRms(taken.path)) < SILENCE_RMS;
     if (silent) {
       cleanup(taken.path);
       this.voiceBusy = false;
@@ -854,8 +951,17 @@ export class Tui {
         spoken = answer.spoken;
       });
       this.sayLines(reply);
-      // Only the model's own sentence is read aloud — never the rendered tables.
-      if (this.speakReplies && spoken) void speak(spoken);
+      // The model's own sentence is what should be read aloud, never the rendered
+      // tables. When the deterministic path answered there is no sentence, so fall
+      // back to the reply's first real line rather than saying nothing at all.
+      if (this.speakReplies) {
+        const toSay = spoken ?? firstSpeakable(reply);
+        if (toSay) {
+          void speak(toSay).then((r) => {
+            if (!r.spoken) this.say(`(could not speak: ${r.detail})`, "warn");
+          });
+        }
+      }
     } catch (err) {
       this.say(`error: ${(err as Error).message}`, "err");
     } finally {

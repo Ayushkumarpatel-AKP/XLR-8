@@ -407,10 +407,12 @@ What you said is **run straight away**, then it goes back to listening — so yo
 without touching the keyboard. The bot stays on screen and changes with what is actually happening —
 `listening…` → `transcribing…` → `checking…` → `answering…`. **Esc** leaves voice mode.
 
-The detection is ffmpeg's `silencedetect` on the live capture: it reports the edges of speech, and the
-gap of quiet after you stop talking is what ends the utterance. No model is in that path, so it costs
-nothing but the recording itself. If a recorder cannot detect the end (or your microphone is unusual),
-it falls back to *press Enter when you are done*.
+The detection is measured from the recording itself: a tap sounds like a click and is ignored, real
+speech followed by a pause ends the utterance. ffmpeg's `silencedetect` runs alongside it and is more
+precise when it reports — but it has been seen to go quiet on a live capture, and a microphone that
+waits forever is worse than one that measures. No model is in that path, so it costs nothing but the
+recording. If the microphone hears nothing at all, it says so rather than waiting silently, and
+Enter ends the utterance by hand.
 
 Ctrl-V and F2 open the microphone too, but most terminals bind Ctrl-V to paste and never pass it on,
 which is why the box advertises Ctrl-O.

@@ -25,9 +25,23 @@ const WAV_HEADER_BYTES = 44;
 const SPEAK_MAX_CHARS = 1200;
 /** How long a recorder gets to shut down on its own before it is killed. */
 const STOP_GRACE_MS = 3000;
-/** What ffmpeg treats as silence, and how long a gap ends an utterance. */
-const VAD_NOISE = "-35dB";
+/**
+ * What ffmpeg treats as silence, and how long a gap ends an utterance.
+ *
+ * -40dB rather than the more usual -35dB: a laptop's built-in array at arm's
+ * length sits close to -35dB, and a detector that never fires is worse than one
+ * that fires a little early.
+ */
+const VAD_NOISE = "-40dB";
 const VAD_GAP_SECONDS = 0.9;
+/**
+ * How long a burst of sound has to last to count as speech.
+ *
+ * The threshold has to be low enough to hear a quiet speaker, which also means
+ * room noise crosses it — a fan, a keyboard, a door. Those are brief, so anything
+ * shorter than this is not an utterance and the microphone keeps listening.
+ */
+const VAD_MIN_SPEECH_SECONDS = 0.5;
 /**
  * Below this RMS a recording is treated as silence — see `wavRms`.
  *
@@ -199,6 +213,8 @@ export class VoiceRecorder {
   private spawnError: Error | null = null;
   private heard = false;
   private ended = false;
+  private sawVad = false;
+  private speechStartedAt: number | null = null;
 
   constructor(rec: Recorder, wavPath: string, opts: VoiceRecorderOptions = {}) {
     this.rec = rec;
@@ -219,6 +235,17 @@ export class VoiceRecorder {
   /** True once any speech has been detected in the current recording. */
   get heardSpeech(): boolean {
     return this.heard;
+  }
+
+  /**
+   * True once the detector has reported anything at all.
+   *
+   * If this stays false the detection is not working on this machine, and the
+   * caller must stop pretending it will — otherwise the microphone stays open
+   * forever waiting for an utterance that will never be announced.
+   */
+  get vadActive(): boolean {
+    return this.sawVad;
   }
 
   get path(): string {
@@ -267,11 +294,25 @@ export class VoiceRecorder {
     if (!this.onUtteranceEnd || this.ended) return;
     for (const line of text.split("\n")) {
       if (!line.includes("silence_")) continue;
-      if (line.includes("silence_end")) {
+      this.sawVad = true;
+
+      const end = /silence_end:\s*([\d.]+)/.exec(line);
+      if (end) {
         this.heard = true;
+        this.speechStartedAt = Number(end[1]);
         continue;
       }
-      if (line.includes("silence_start") && this.heard) {
+
+      const start = /silence_start:\s*([\d.]+)/.exec(line);
+      if (start && this.heard) {
+        const spokeFor = Number(start[1]) - (this.speechStartedAt ?? Number(start[1]));
+        if (spokeFor < VAD_MIN_SPEECH_SECONDS) {
+          // A click, not a sentence. Keep listening, and forget it so the next
+          // real utterance is measured from its own start.
+          this.heard = false;
+          this.speechStartedAt = null;
+          continue;
+        }
         this.ended = true;
         this.onUtteranceEnd();
         return;
@@ -711,26 +752,58 @@ export async function wavRms(wavPath: string): Promise<number> {
   } catch {
     return 0;
   }
+  const dataStart = findWavData(buf);
+  if (dataStart < 0) return 0;
+  return pcmRms(buf, dataStart, Math.min(dataLen(buf, dataStart), buf.length - dataStart));
+}
 
-  // Walk the chunks: a wav may carry `LIST`/`fact` before `data`.
+/**
+ * RMS of just the tail of a wav, for callers doing their own voice-activity
+ * detection while the file is still being written.
+ *
+ * This is the detection that does not depend on anything ffmpeg says: the
+ * recorder's own output is read back and measured. ffmpeg's `silencedetect` is
+ * more precise when it reports, but it has been seen to go silent on a live
+ * capture — and a microphone that waits forever is exactly the bug this avoids.
+ */
+export async function wavTailRms(wavPath: string, seconds = 0.25, sampleRate = 16000): Promise<number> {
+  let buf: Buffer;
+  try {
+    buf = await readFile(wavPath);
+  } catch {
+    return 0;
+  }
+  const dataStart = findWavData(buf);
+  if (dataStart < 0) return 0;
+
+  // A streaming muxer may write a placeholder length, so trust the file size.
+  const available = buf.length - dataStart;
+  if (available < 2) return 0;
+  const want = Math.min(available, Math.max(2, Math.floor(seconds * sampleRate) * 2));
+  return pcmRms(buf, dataStart + available - want, want);
+}
+
+/** Offset of the `data` chunk's payload, or -1. A wav may carry chunks before it. */
+function findWavData(buf: Buffer): number {
   let offset = 12;
-  let dataStart = -1;
-  let dataLen = 0;
   while (offset + 8 <= buf.length) {
     const id = buf.toString("ascii", offset, offset + 4);
     const size = buf.readUInt32LE(offset + 4);
-    if (id === "data") {
-      dataStart = offset + 8;
-      dataLen = Math.min(size, buf.length - dataStart);
-      break;
-    }
+    if (id === "data") return offset + 8;
     offset += 8 + size + (size % 2);
   }
-  if (dataStart < 0 || dataLen < 2) return 0;
+  return -1;
+}
 
+function dataLen(buf: Buffer, dataStart: number): number {
+  const declared = buf.readUInt32LE(dataStart - 4);
+  return declared > 0 ? declared : buf.length - dataStart;
+}
+
+function pcmRms(buf: Buffer, from: number, length: number): number {
   let sum = 0;
   let count = 0;
-  for (let i = dataStart; i + 1 < dataStart + dataLen; i += 2) {
+  for (let i = from; i + 1 < from + length; i += 2) {
     const sample = buf.readInt16LE(i) / 32768;
     sum += sample * sample;
     count++;
