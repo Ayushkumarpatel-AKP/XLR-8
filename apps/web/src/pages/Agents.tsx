@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import type { AgentManifest, AgentRuntimeConfig, AgentRuntimeKind, Canary, CanarySeverity } from "@agentguard/contracts";
 import { api, useApi } from "../lib/api.js";
 import { useAgents } from "../lib/agent-context.js";
-import { Avatar, Badge, Card, Empty, ErrorBox, Loading, PageHeader, SeverityBadge, StatCard } from "../components/ui.js";
+import { Avatar, Badge, Card, Empty, ErrorBox, ExposureBadge, Loading, PageHeader, SeverityBadge, StatCard } from "../components/ui.js";
 
 /** Import a real agent's tool surface from GitHub and audit it. */
 function ImportFromGitHub({ onImported }: { onImported: () => void }) {
@@ -173,7 +173,13 @@ export function AgentsPage() {
                 logo={<Avatar src={a.annotations?.avatarUrl} name={a.name} size={26} />}
                 title={a.name}
                 sub={`v${a.version} · ${imported ? `imported · ${a.tools.length} tools` : a.model}`}
-                right={<Badge tone={latest?.risk?.band === "critical" ? "critical" : "ok"}>{latest?.risk?.band ?? "n/a"}</Badge>}
+                right={
+                  latest?.risk ? (
+                    <ExposureBadge band={latest.risk.band} findings={latest.findings.length} />
+                  ) : (
+                    <Badge tone="info">no run yet</Badge>
+                  )
+                }
                 className={open ? "runtime-open" : ""}
               >
                 <p className="small dim">{a.description}</p>

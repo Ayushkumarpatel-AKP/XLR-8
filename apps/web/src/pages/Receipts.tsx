@@ -53,10 +53,14 @@ function ReceiptCard({
   link: string;
 }) {
   const superseded = currentFingerprint !== null && currentFingerprint !== receipt.fingerprint;
+  // Readiness is the ledger's call, not the card's: a receipt only glows while
+  // it still holds the fingerprint the ledger points at for this agent.
+  const ready = currentFingerprint !== null && currentFingerprint === receipt.fingerprint;
   const [copied, setCopied] = useState(false);
 
   return (
     <Card
+      className={ready ? "receipt-ready" : ""}
       title={receipt.agentName}
       sub={`${receipt.fingerprint.slice(0, 26)}… · issued ${new Date(receipt.issuedAt).toLocaleString()}`}
       right={

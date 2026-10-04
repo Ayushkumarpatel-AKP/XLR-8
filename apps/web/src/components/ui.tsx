@@ -80,6 +80,26 @@ export function Badge({ children, tone = "info" }: { children: ReactNode; tone?:
   return <span className={`badge ${tone}`}>{children}</span>;
 }
 
+/** "0 findings" / "1 finding". The counterweight to every exposure band. */
+export function findingsLabel(n: number): string {
+  return `${n} finding${n === 1 ? "" : "s"}`;
+}
+
+/**
+ * An exposure band, never rendered on its own.
+ *
+ * "medium" beside a company's name reads as a verdict on that company. Paired
+ * with the finding count it reads as what it actually is: how much the surface
+ * can do, and how much of it turned out to be wrong.
+ */
+export function ExposureBadge({ band, findings }: { band: string; findings: number }) {
+  return (
+    <span className={`badge ${band}`}>
+      {band} · {findingsLabel(findings)}
+    </span>
+  );
+}
+
 export function RiskDial({ score, band, size = 118 }: { score: number; band: string; size?: number }) {
   const r = (size - 12) / 2;
   const c = 2 * Math.PI * r;

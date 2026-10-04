@@ -236,7 +236,7 @@ export function WarRoom() {
                   <SwarmPanel swarm={mission.swarm} />
                 </Card>
 
-                <Card title="Real-time Risk" className="war-risk">
+                <Card title="Live exposure" className="war-risk">
                   <div className="war-risk-body">
                     <RiskDial score={mission.risk?.score ?? 0} band={mission.risk?.band ?? "low"} size={116} />
                     <div className="war-risk-side">

@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import type { ScenarioId } from "@agentguard/contracts";
 import { api, useApi, useGlobalStream } from "../lib/api.js";
 import { useAgents } from "../lib/agent-context.js";
-import { Badge, Card, Empty, ErrorBox, EventConsole, Loading, PageHeader, SeverityBadge, SeverityLegend, StatCard, highestSeverity } from "../components/ui.js";
+import { Badge, Card, Empty, ErrorBox, EventConsole, Loading, PageHeader, SeverityBadge, SeverityLegend, StatCard, findingsLabel, highestSeverity } from "../components/ui.js";
 import { shortId } from "../lib/format.js";
 
 function Sparkline({ values, height = 44 }: { values: number[]; height?: number }) {
@@ -198,15 +198,32 @@ export function Dashboard() {
           deltaDir={severityCounts.critical ? "up" : undefined}
         />
         <StatCard
-          label="Risk Score"
+          label="Capability exposure"
           value={latest?.risk ? `${latest.risk.score}/100` : "—"}
-          delta={latest?.risk ? latest.risk.band.toUpperCase() : "no mission"}
+          delta={
+            latest?.risk
+              ? `${latest.risk.band.toUpperCase()} · ${findingsLabel(latest.findings.length)}`
+              : "no mission"
+          }
           deltaDir={latest?.risk && latest.risk.score >= 60 ? "up" : undefined}
         />
       </div>
 
+      {latest?.scenarioId === "audit" && (
+        <p className="small faint" style={{ margin: "-4px 0 0" }}>
+          That was a <strong>static audit</strong> — nothing was executed and no request reached the vendor. The score
+          measures <strong>what this surface can do</strong>, not how trustworthy its source is.{" "}
+          {latest.findings.length === 0
+            ? "No problem was found in it."
+            : `${findingsLabel(latest.findings.length)} — every one of them is backed by evidence.`}
+        </p>
+      )}
+
       <div className="split">
-        <Card title="Risk Trend" sub={active ? `${active.name} · score per mission` : "score per completed mission (from engine)"}>
+        <Card
+          title="Exposure Trend"
+          sub={active ? `${active.name} · what its surface can do, per mission` : "capability exposure per completed mission"}
+        >
           <Sparkline values={riskSeries} />
           <div className="faint tiny" style={{ marginTop: 6 }}>
             {sortedMissions.length} mission(s) · latest{" "}
