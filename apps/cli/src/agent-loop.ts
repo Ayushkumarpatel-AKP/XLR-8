@@ -25,6 +25,8 @@ export interface AgentTurn {
   usedTools: string[];
   /** Set when the model call itself failed, so the caller can fall back. */
   error: string | null;
+  /** True when the caller asked it to stop before it had finished. */
+  stopped: boolean;
 }
 
 const MAX_STEPS = 8;
@@ -96,9 +98,20 @@ export async function runAgentTurn(opts: {
   history: Array<{ role: "user" | "assistant"; text: string }>;
   input: string;
   maxSteps?: number;
+  /**
+   * Called as the turn moves along. A tool-using turn can run for a while, and a
+   * screen that says only "checking…" is indistinguishable from one that has
+   * hung — so the caller gets told what is happening.
+   */
+  onProgress?: (note: string) => void;
+  /** Checked between steps. A turn must never be un-cancellable. */
+  shouldStop?: () => boolean;
 }): Promise<AgentTurn | null> {
   const { router, tools, history, input } = opts;
   if (tools.length === 0 || !router.hasToolProvider()) return null;
+
+  const note = (s: string): void => opts.onProgress?.(s);
+  const stopped = (): boolean => opts.shouldStop?.() === true;
 
   const specs: ToolSpec[] = toolSpecs(tools);
   const messages: ChatMessage[] = [
@@ -114,11 +127,17 @@ export async function runAgentTurn(opts: {
   let providerId: string | null = null;
   let model: string | null = null;
   let steps = 0;
+  let stoppedEarly = false;
 
   const limit = opts.maxSteps ?? MAX_STEPS;
 
   try {
     for (; steps < limit; steps++) {
+      if (stopped()) {
+        stoppedEarly = true;
+        break;
+      }
+      note(steps === 0 ? "deciding what to check" : "reading the results");
       const outcome = await router.chat(messages, specs);
       providerId = outcome.providerId;
       model = outcome.model;
@@ -130,6 +149,11 @@ export async function runAgentTurn(opts: {
       messages.push({ role: "assistant", content: result.content ?? null, tool_calls: result.toolCalls });
 
       for (const call of result.toolCalls) {
+        if (stopped()) {
+          stoppedEarly = true;
+          break;
+        }
+        note(call.function.name.replace(/_/g, " "));
         trace.push({ text: `  ▸ ${describeCall(call.function.name, call.function.arguments)}`, kind: "dim" });
 
         const tool = tools.find((t) => t.name === call.function.name);
@@ -158,7 +182,8 @@ export async function runAgentTurn(opts: {
 
     // Models very often end a tool-using turn with no prose at all. Ask for the
     // summary explicitly rather than handing the user a wall of bare output.
-    if (text.length === 0 && usedTools.length > 0) {
+    if (text.length === 0 && usedTools.length > 0 && !stopped()) {
+      note("writing the answer");
       messages.push({
         role: "user",
         content:
@@ -182,8 +207,9 @@ export async function runAgentTurn(opts: {
       steps,
       usedTools,
       error: (err as Error).message,
+      stopped: stoppedEarly,
     };
   }
 
-  return { text, trace, lines, providerId, model, steps, usedTools, error: null };
+  return { text, trace, lines, providerId, model, steps, usedTools, error: null, stopped: stoppedEarly };
 }

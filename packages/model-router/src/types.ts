@@ -1,6 +1,7 @@
 import { loadDotEnv } from "./env.js";
 
 export type ProviderKind =
+  | "nvidia"
   | "groq"
   | "deepseek"
   | "ollama"
@@ -83,6 +84,9 @@ export interface ModelProvider {
 }
 
 export interface ProviderConfig {
+  /** NVIDIA NIM — OpenAI-compatible, and the primary provider when set. */
+  nvidiaApiKey?: string;
+  nvidiaModel?: string;
   groqApiKey?: string;
   groqModel?: string;
   deepseekApiKey?: string;
@@ -102,6 +106,8 @@ export function loadProviderConfig(env: NodeJS.ProcessEnv = process.env): Provid
   loadDotEnv();
   const read = (key: string): string | undefined => (env[key] && env[key] !== "" ? env[key] : undefined);
   return {
+    nvidiaApiKey: read("NVIDIA_API_KEY"),
+    nvidiaModel: read("NVIDIA_MODEL"),
     groqApiKey: read("GROQ_API_KEY"),
     groqModel: read("GROQ_MODEL"),
     deepseekApiKey: read("DEEPSEEK_API_KEY"),

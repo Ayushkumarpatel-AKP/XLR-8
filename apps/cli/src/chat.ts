@@ -335,6 +335,12 @@ export interface ChatTurn {
   text: string;
 }
 
+/** A caller's handle on a turn in flight: what it is doing, and how to stop it. */
+export interface AskOptions {
+  onProgress?: (note: string) => void;
+  shouldStop?: () => boolean;
+}
+
 export class ChatSession {
   private readonly history: ChatTurn[] = [];
   private lastMissionId: string | null = null;
@@ -413,7 +419,7 @@ export class ChatSession {
    * which is shown beneath whatever the model says. So the conversation is
    * human, and the numbers are still the engine's.
    */
-  private async converse(input: string): Promise<Line[] | null> {
+  private async converse(input: string, opts: AskOptions): Promise<Line[] | null> {
     // A slash command is the user steering the tool directly — do not put a model
     // in the way of it.
     if (input.startsWith("/")) return null;
@@ -423,6 +429,8 @@ export class ChatSession {
       tools: this.agentTools(),
       history: this.history.slice(0, -1).map((h) => ({ role: h.role, text: h.text })),
       input,
+      ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
+      ...(opts.shouldStop ? { shouldStop: opts.shouldStop } : {}),
     });
     if (!turn) return null;
 
@@ -435,7 +443,17 @@ export class ChatSession {
       this.lastSpoken = turn.text;
     }
     if (turn.lines.length > 0) out.push({ text: "", kind: "dim" }, ...turn.lines);
-    if (turn.error) out.push({ text: `  (the model call failed part-way: ${turn.error})`, kind: "warn" });
+    if (turn.error) {
+      // A rate limit is a wait, not a fault — say what to do rather than pasting
+      // the provider's JSON at someone who just wants an answer.
+      const rateLimited = /429|rate limited|too many requests/i.test(turn.error);
+      out.push({
+        text: rateLimited
+          ? "  The model is rate limited right now — wait a few seconds and ask again."
+          : `  The model call failed: ${turn.error}`,
+        kind: "warn",
+      });
+    }
 
     // Nothing usable came back — let the deterministic path answer instead.
     return out.length > 0 ? out : null;
@@ -447,7 +465,10 @@ export class ChatSession {
    * `spoken` is what a speech synthesiser should read: the model's sentence, not
    * the rendered tables underneath it. Null when the deterministic path answered.
    */
-  async ask(rawInput: string): Promise<{ lines: Line[]; spoken: string | null }> {
+  async ask(
+    rawInput: string,
+    opts: AskOptions = {},
+  ): Promise<{ lines: Line[]; spoken: string | null }> {
     const input = rawInput.trim();
     this.history.push({ role: "user", text: input });
 
@@ -455,7 +476,7 @@ export class ChatSession {
     // deterministic matcher stays as the fallback, so the CLI never depends on a
     // provider being reachable.
     this.lastSpoken = null;
-    const viaModel = await this.converse(input);
+    const viaModel = await this.converse(input, opts);
     const spoken = this.lastSpoken;
     const lines = viaModel ?? (await this.dispatch(input, classify(input)));
 

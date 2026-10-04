@@ -844,7 +844,9 @@ Keys are read from the **backend environment only** (`.env`, never committed, ne
 the browser):
 
 ```bash
-GROQ_API_KEY=            # preferred (OpenAI-compatible, tool calling)
+NVIDIA_API_KEY=          # preferred (NVIDIA NIM, OpenAI-compatible, tool calling)
+NVIDIA_MODEL=nvidia/nemotron-3-super-120b-a12b
+GROQ_API_KEY=            # fallback
 GROQ_MODEL=openai/gpt-oss-120b
 DEEPSEEK_API_KEY=
 HUGGINGFACE_API_KEY=
@@ -852,9 +854,19 @@ OLLAMA_BASE_URL=http://127.0.0.1:11434
 OPENAI_COMPATIBLE_BASE_URL=
 ```
 
-Fallback order: **Groq → configured secondary → local Ollama → deterministic core.** Rate
-limits (429) and transient 5xx are retried with backoff. A provider is only shown as
-*Connected* when its health check passes.
+Fallback order: **NVIDIA → Groq → configured secondary → local Ollama → deterministic core.** A
+provider is only shown as *Connected* when its health check passes, and only a tool-capable one can
+drive a trap.
+
+NVIDIA's model catalogue is per-account: `GET /v1/models` lists everything NIM serves, but a model
+your account cannot serve answers **404**, and a retired one answers **410** with the date it went
+away. `agentguard doctor` is the honest way to see what is actually usable — on one account
+`openai/gpt-oss-120b` had been retired while `nvidia/nemotron-3-super-120b-a12b` answered in 511ms.
+
+Retries are deliberately impatient. A rate limited provider asks for a 60-second wait, and honouring
+three of those left a person watching a spinner for three minutes with no way to tell it apart from a
+hang — so the wait is capped, and the CLI says *"rate limited, wait a few seconds and ask again"*
+instead of freezing.
 
 ```bash
 pnpm models        # list the models your key can actually use

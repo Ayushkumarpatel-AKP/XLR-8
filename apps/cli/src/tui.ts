@@ -5,7 +5,7 @@ import type { DemoLab } from "@agentguard/demo-lab";
 import { SCENARIO_IDS, SCENARIOS, listScenarios, type ScenarioKey } from "@agentguard/demo-lab";
 import { RESET, colourLine, fit, stripAnsi, visibleLength, wrap, type Kind, type Line } from "./kind.js";
 import { renderBanner } from "./banner.js";
-import { ChatSession, classify } from "./chat.js";
+import { ChatSession, classify, type AskOptions } from "./chat.js";
 import { isDemoAgent, noAgentNotice, providerWarning, sandboxNotice } from "./support.js";
 import { failureReason, renderFailure, renderProviderWarning } from "./verify-view.js";
 import { renderBot, type BotState } from "./bot.js";
@@ -191,6 +191,11 @@ export class Tui {
   /** A clip is being transcribed or answered, so the microphone is closed. */
   private voiceBusy = false;
   private voiceTimer: NodeJS.Timeout | null = null;
+  /** What a turn in flight is doing, so "checking…" is never the whole story. */
+  private voiceNote = "";
+  private voiceBusySince = 0;
+  /** Set by Esc while a turn is running — checked between its steps. */
+  private voiceStopRequested = false;
   /** Level-based detection state, independent of anything ffmpeg reports. */
   private levelSpeaking = false;
   private levelSpeechStartedAt = 0;
@@ -526,7 +531,16 @@ export class Tui {
     // While the microphone is open the only keys that mean anything are the ones
     // that work it — everything else would land in the input box behind the bot.
     if (this.voiceOn) {
-      if (chunk === "\x1b" || chunk === "\x03") return void this.exitVoice();
+      if (chunk === "\x1b" || chunk === "\x03") {
+        // While a turn is running, Esc stops the turn — that is the only way out
+        // of a slow answer. Otherwise it leaves voice mode.
+        if (this.voiceBusy) {
+          this.voiceStopRequested = true;
+          this.say("  stopping…", "dim");
+          return;
+        }
+        return void this.exitVoice();
+      }
       // While a clip is being handled there is nothing to say — and Enter must not
       // fall through to sending an empty message.
       if (this.voiceBusy) return;
@@ -701,8 +715,18 @@ export class Tui {
   private voiceTick(): void {
     const v = this.voice;
     if (!v) return;
-    v.seconds = (Date.now() - v.startedAt) / 1000;
     v.frame++;
+
+    // A turn can run for a while — show what it is doing and how long it has been
+    // doing it, so a slow answer is never mistaken for a hung one.
+    if (this.voiceBusy) {
+      const secs = Math.floor((Date.now() - this.voiceBusySince) / 1000);
+      v.label = `${this.voiceNote || "checking…"} · ${secs}s`;
+      this.requestRender();
+      return;
+    }
+
+    v.seconds = (Date.now() - v.startedAt) / 1000;
     // A stuck recording still has to end. Silence after the cap is discarded, so
     // this costs nothing but bounds the buffer.
     if (v.seconds > VOICE_MAX_SECONDS) {
@@ -793,8 +817,10 @@ export class Tui {
     if (!recorder || this.voiceBusy) return;
 
     this.voiceBusy = true;
+    this.voiceBusySince = Date.now();
+    this.voiceStopRequested = false;
     this.recorder = null;
-    this.stopVoiceTimer();
+    // The timer keeps running so the label can count up while the turn works.
 
     // Read the detector's verdict BEFORE stopping the process. It only counts as
     // usable if it actually reported something — a detector that never fired
@@ -827,6 +853,7 @@ export class Tui {
       return;
     }
 
+    this.voiceNote = "transcribing";
     if (this.voice) {
       this.voice.state = "thinking";
       this.voice.label = "transcribing…";
@@ -855,13 +882,20 @@ export class Tui {
 
     // Straight through: you spoke, so it runs.
     this.say(`  you said: ${said}`, "dim");
+    this.voiceNote = "checking";
     if (this.voice) {
       this.voice.label = "checking…";
       this.requestRender();
     }
     this.input = said;
-    await this.submit();
+    await this.submit({
+      onProgress: (noteText) => {
+        this.voiceNote = noteText;
+      },
+      shouldStop: () => this.voiceStopRequested,
+    });
     this.voiceBusy = false;
+    this.voiceNote = "";
     this.afterExchange();
   }
 
@@ -891,7 +925,7 @@ export class Tui {
     await this.releaseRecorder();
   }
 
-  private async submit(): Promise<void> {
+  private async submit(askOpts: AskOptions = {}): Promise<void> {
     const raw = this.input.trim();
     this.input = "";
     this.menuMatches = [];
@@ -900,11 +934,11 @@ export class Tui {
       this.requestRender();
       return;
     }
-    await this.runLine(raw);
+    await this.runLine(raw, askOpts);
   }
 
   /** Run one line of input (slash command or plain text). Public for headless use/tests. */
-  async runLine(raw: string): Promise<void> {
+  async runLine(raw: string, askOpts: AskOptions = {}): Promise<void> {
     if (raw.startsWith("/")) {
       const [name, ...rest] = raw.slice(1).split(/\s+/);
       const arg = rest.join(" ");
@@ -946,7 +980,7 @@ export class Tui {
       let reply: Line[] = [];
       let spoken: string | null = null;
       await this.withLivePanel("Security mission", async () => {
-        const answer = await this.chat.ask(raw);
+        const answer = await this.chat.ask(raw, askOpts);
         reply = answer.lines;
         spoken = answer.spoken;
       });

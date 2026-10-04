@@ -31,6 +31,17 @@ export class OpenAiCompatibleProvider implements ModelProvider {
   private readonly local: boolean;
   private lastHealth: ProviderHealth | null = null;
 
+  /**
+   * Retry policy for 429/5xx.
+   *
+   * Deliberately impatient: this is used by an interactive CLI, and a provider
+   * asking for a 60-second wait three times over reads as a frozen screen. The
+   * caller is told what happened and can simply ask again.
+   */
+  private static readonly RETRY_ATTEMPTS = 3;
+  private static readonly RETRY_BASE_MS = 1500;
+  private static readonly RETRY_MAX_WAIT_MS = 5000;
+
   constructor(opts: OpenAiCompatibleOptions) {
     this.id = opts.id;
     this.kind = opts.kind;
@@ -67,12 +78,19 @@ export class OpenAiCompatibleProvider implements ModelProvider {
       signal: AbortSignal.timeout(120_000),
     });
 
-    if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+    if ((res.status === 429 || res.status >= 500) && attempt < OpenAiCompatibleProvider.RETRY_ATTEMPTS - 1) {
+      // Honour the provider's own `retry-after`, but only up to a point. A rate
+      // limited provider asks for a minute, and waiting three of those leaves a
+      // person watching a spinner for three minutes with no way to tell it apart
+      // from a hang. Failing in seconds tells them what happened instead.
       const retryAfterHeader = Number(res.headers.get("retry-after"));
-      const waitSec = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0
-        ? Math.min(60, retryAfterHeader)
-        : Math.min(45, 8 * (attempt + 1));
-      await new Promise((resolve) => setTimeout(resolve, waitSec * 1000));
+      const requested =
+        Number.isFinite(retryAfterHeader) && retryAfterHeader > 0
+          ? retryAfterHeader * 1000
+          : OpenAiCompatibleProvider.RETRY_BASE_MS * (attempt + 1);
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(OpenAiCompatibleProvider.RETRY_MAX_WAIT_MS, requested)),
+      );
       return this.postJson<T>(path, body, attempt + 1);
     }
 

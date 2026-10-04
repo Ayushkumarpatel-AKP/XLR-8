@@ -47,6 +47,19 @@ export class ModelRouter {
     this.healthRetryMs = config.healthRetryMs ?? 15_000;
     const list: ModelProvider[] = [];
 
+    // NVIDIA NIM first: it is OpenAI-compatible like everything else here, and it
+    // is the primary when configured. Groq stays as the fallback.
+    if (config.nvidiaApiKey) {
+      list.push(
+        new OpenAiCompatibleProvider({
+          id: "nvidia",
+          kind: "nvidia",
+          model: config.nvidiaModel ?? "nvidia/nemotron-3-super-120b-a12b",
+          baseUrl: "https://integrate.api.nvidia.com/v1",
+          apiKey: config.nvidiaApiKey,
+        }),
+      );
+    }
     if (config.groqApiKey) {
       list.push(
         new OpenAiCompatibleProvider({
