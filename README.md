@@ -395,30 +395,45 @@ Press **Ctrl-O** and just talk. Nothing to hold, nothing to press to stop — it
 out when you have finished, and answers:
 
 ```
-    ▄█████████▄
-   █           █
-   █ ◉◉     ◉◉ █  listening… 4s
-   █    ▁▁▁    █
-  █ ▀█████████▀
-  ║╤════╧═╧════╤╗
-  ║│  ▒▓▓▓▓▓▒  │║ ▂▄▇▃▆█▄
-   ╧═══════════╧█
-   ██         ██
-  ▀▀▀         ▀▀▀
+         ●
+    ▄▄███╵███▄▄
+   █ ▫██   ██▫ █  listening… 4s
+   █˘███   ███˘█
+    ▀▀██▁▁▁██▀▀
+     ▖▄▄▄▄▄▄▄▗
+     █▐▒▒▒▒▒▌█    ●
+     ●▝▀▀▀▀▀▘●
+      ██   ██
+     ▝▀▘   ▝▀▘
 ```
 
-A whole robot — head, torso, two arms with hands, two legs with feet — and it **does** things:
+A whole chibi robot — a big head over a small body, two-row eyes with a highlight in each, blush on
+its cheeks, an antenna whose tip light reports what it is doing, stubby arms ending in ball hands and
+little feet.
 
-- **listening** — one hand raised, a live level meter beside it, so "is it hearing me?" is answerable
-  by looking.
-- **thinking** — this is what a long turn looks like: hands shuffling, a scanner crossing its chest
-  panel, a dot travelling the track. The label says what it is doing and for how long
-  (`run traps · 12s`), so a slow answer is never mistaken for a hung one.
-- **talking** — mouth opening and closing, arms gesturing, a small voice meter.
+It **does** things:
 
-And it **reacts**, from the reply rather than a guess: a proven leak gets wide eyes and an open mouth
-(*alarmed*), a clean result gets arced eyes and a smile (*happy*), something it could not work around
-gets a flat frown (*concerned*). The reaction is held for a moment before it goes back to listening.
+- **idle** — breathes (the head settles and the torso squashes), blinks, and its antenna holds steady.
+- **listening** — one hand cupped beside its ear, ripples above, eyes lit wide, and a live level meter
+  that rolls every frame — so "is it hearing me?" is answerable by looking.
+- **thinking** — this is what a long turn looks like: eyes lidded, hands shuffling, a scanner
+  sweeping across its chest panel, a spark running along the top of its head, a dot travelling the
+  track. The label says what it is doing and for how long (`run traps · 12s`), so a slow answer is
+  never mistaken for a hung one.
+- **talking** — the mouth cycles through six shapes, the head nods in step with it, and puffs pop
+  beside it.
+
+And it **reacts**, from the reply rather than a guess:
+
+```
+alarmed    ! ◉◉◉   ◉◉◉ !     a trap proved a leak   (wide ringed eyes, o-mouth)
+happy      ✦ ◠◠◠   ◠◠◠ ♥     a clean result         (arced eyes, a smile, a heart)
+concerned    ▄██   ██▄ ,     something it could not work around (a sweat drop)
+focused      ▄▄▄   ▄▄▄       while working
+```
+
+The props live in the margins, so no emotion ever changes the figure's size, and the reaction is held
+for a moment before it goes back to listening.
 
 What you said is **run straight away**, then it goes back to listening — so you can keep talking
 without touching the keyboard. **Esc** leaves voice mode. On a short terminal it shows only its head.
