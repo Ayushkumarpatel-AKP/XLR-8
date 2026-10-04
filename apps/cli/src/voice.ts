@@ -16,6 +16,7 @@ import { existsSync, statSync, unlinkSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { loadDotEnv } from "@agentguard/model-router";
 import type { Line } from "./kind.js";
+import { LANG_LABEL, speechVoicesFor, type Lang } from "./language.js";
 
 const GROQ_TRANSCRIBE_URL = "https://api.groq.com/openai/v1/audio/transcriptions";
 const WHISPER_MODEL = "whisper-large-v3-turbo";
@@ -609,7 +610,10 @@ export function toSpeech(text: string): string {
   // block art, box drawing and status glyphs (█ ╔ ═ ▓ ◉ ◠ ▁ ★ ·), and a
   // synthesiser either reads them aloud as their names or stumbles over them.
   // A whitelist catches the ones nobody thought to blacklist.
-  out = out.replace(/[^\p{L}\p{N}\s.,;:!?'"()\-]/gu, " ");
+  // `\p{M}` is not decoration: Devanagari matras are combining marks, and
+  // dropping them turns "एक एजेंट" into "एक एज ट". The danda `।` is Hindi's full
+  // stop — without it a Hindi sentence has no pause at the end.
+  out = out.replace(/[^\p{L}\p{M}\p{N}\s.,;:!?'"()\-।॥]/gu, " ");
 
   // Collapse the gaps the removals leave, and tidy the spacing before punctuation.
   out = out.replace(/\s+/g, " ");
@@ -691,8 +695,47 @@ function runWithArgs(command: string, args: string[], timeoutMs: number): Promis
   });
 }
 
-/** Speech out. Resolves when done or when it is not available (never throws). */
-export async function speak(text: string): Promise<{ spoken: boolean; detail: string }> {
+/**
+ * The shell to speak through.
+ *
+ * `pwsh` is preferred because Windows PowerShell 5.1's `System.Speech` only sees
+ * the two legacy desktop voices, while PowerShell 7 sees the whole set — which is
+ * where Hindi and Indian English live. Picking the wrong one silently loses the
+ * ability to speak those languages at all.
+ */
+function speechShell(): string | null {
+  return which("pwsh") ?? which("powershell");
+}
+
+/** The voice names this machine has installed, for choosing one per language. */
+export function installedVoices(): string[] {
+  if (process.platform !== "win32") return [];
+  const ps = speechShell();
+  if (!ps) return [];
+  try {
+    const r = spawnSync(
+      ps,
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Add-Type -AssemblyName System.Speech;" +
+          "(New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices()" +
+          "|ForEach-Object{$_.VoiceInfo.Name}",
+      ],
+      { encoding: "utf8", windowsHide: true, timeout: 8000 },
+    );
+    return (r.stdout ?? "")
+      .split(/\r?\n/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** Speech out, in the language's own voice where one is installed. Never throws. */
+export async function speak(text: string, lang: Lang = "en"): Promise<{ spoken: boolean; detail: string }> {
   const phrase = toSpeech(text);
   if (!phrase) return { spoken: false, detail: "There was nothing to speak." };
 
@@ -701,17 +744,33 @@ export async function speak(text: string): Promise<{ spoken: boolean; detail: st
   const timeoutMs = speakTimeout(spokenText);
 
   if (process.platform === "win32") {
-    const ps = which("powershell") ?? which("pwsh");
-    if (!ps) return { spoken: false, detail: "Windows SAPI text-to-speech is unavailable (powershell.exe not found)." };
+    const ps = speechShell();
+    if (!ps) return { spoken: false, detail: "Windows SAPI text-to-speech is unavailable (no PowerShell found)." };
+    // Pick a voice for the language when one is installed — Hindi read by an
+    // English voice is not Hindi. The list is checked inside PowerShell, so a
+    // missing voice simply leaves the default in place.
+    const wanted = speechVoicesFor(lang);
+    const pick =
+      wanted.length > 0
+        ? `$want=@(${wanted.map((n) => `'${n}'`).join(",")});` +
+          "$have=@($s.GetInstalledVoices()|ForEach-Object{$_.VoiceInfo.Name});" +
+          "$pick=$want|Where-Object{$have -contains $_}|Select-Object -First 1;" +
+          "if($pick){$s.SelectVoice($pick)};"
+        : "";
     // The text is piped in on stdin to avoid every quoting problem.
     const script =
       "[Console]::InputEncoding=[System.Text.Encoding]::UTF8;" +
+      "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;" +
       "Add-Type -AssemblyName System.Speech;" +
       "$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;" +
-      "$s.Speak([Console]::In.ReadToEnd())";
+      pick +
+      "$picked=$s.Voice.VoiceInfo.Name;" +
+      "$s.Speak([Console]::In.ReadToEnd());" +
+      "[Console]::Error.Write($picked)";
     const ok = await runWithStdin(ps, ["-NoProfile", "-NonInteractive", "-Command", script], spokenText, timeoutMs);
     if (!ok) return { spoken: false, detail: "Windows SAPI text-to-speech failed to run." };
-    return { spoken: true, detail: truncated ? "Spoken via Windows SAPI (text truncated)." : "Spoken via Windows SAPI." };
+    const via = wanted.length > 0 ? `Windows SAPI (${LANG_LABEL[lang]})` : "Windows SAPI";
+    return { spoken: true, detail: truncated ? `Spoken via ${via} (text truncated).` : `Spoken via ${via}.` };
   }
 
   if (process.platform === "darwin") {

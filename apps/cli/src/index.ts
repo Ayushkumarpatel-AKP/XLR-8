@@ -48,6 +48,8 @@ import {
   renderTrapLibrary,
 } from "./verify-view.js";
 import { demoEnabled, noAgentNotice, providerWarning, sandboxNotice } from "./support.js";
+import { LANG_LABEL, resolveLang, speechLangFor } from "./language.js";
+import { installedVoices } from "./voice.js";
 
 const SEV_COLOR: Record<string, (s: string) => string> = {
   critical: ansi.red,
@@ -295,6 +297,20 @@ program
       ...(verdict
         ? ["", ...verdict.split("\n").map((l, i) => ansi.yellow(i === 0 ? `  ▲ ${l}` : `    ${l}`))]
         : []),
+      "",
+      ansi.bold("VOICE"),
+      // Which language a spoken reply would come out in, and through which voice.
+      ...(() => {
+        const voices = installedVoices();
+        const wanted = resolveLang(process.env.AGENTGUARD_LANG);
+        const resolved = speechLangFor(wanted, voices);
+        const rows = [
+          `${pad("Answer in", 20)}${LANG_LABEL[wanted]}`,
+          `${pad("Speech voice", 20)}${resolved.detail}`,
+        ];
+        if (voices.length > 0) rows.push(`${pad("Installed", 20)}${voices.length}`);
+        return rows.map((r) => ansi.gray(r));
+      })(),
       "",
       ansi.gray("No secret values are ever printed."),
     ];
@@ -1335,9 +1351,18 @@ mcp
  * shown underneath comes from the engine. With no tool-capable provider the
  * same commands fall back to the deterministic matcher, so this still works.
  */
-function makeSession(app: CliApp): ChatSession {
-  return new ChatSession(app.engine, app.lab, app.engine.router, app.dataDir);
+function makeSession(app: CliApp, lang?: string): ChatSession {
+  return new ChatSession(
+    app.engine,
+    app.lab,
+    app.engine.router,
+    app.dataDir,
+    resolveLang(lang ?? process.env.AGENTGUARD_LANG),
+  );
 }
+
+/** The `--lang` option, shared by every conversational command. */
+const LANG_OPTION = ["--lang <lang>", "answer in: en | hinglish | hi (default: AGENTGUARD_LANG, else en)"] as const;
 
 function answeringWith(app: CliApp): string {
   if (!app.engine.router.hasToolProvider()) {
@@ -1350,10 +1375,11 @@ function answeringWith(app: CliApp): string {
 program
   .command("ask <question...>")
   .description("ask about your agents in plain language — the model picks and runs the checks")
-  .action(async (questionParts: string[]) => {
+  .option(LANG_OPTION[0], LANG_OPTION[1])
+  .action(async (questionParts: string[], opts: { lang?: string }) => {
     const app = createCliApp();
     const question = questionParts.join(" ").trim();
-    const lines = await makeSession(app).handle(question);
+    const lines = await makeSession(app, opts.lang).handle(question);
     if (isJson()) {
       process.stdout.write(
         JSON.stringify({ question, reply: lines.map((l) => l.text), answeringWith: answeringWith(app) }, null, 2) + "\n",
@@ -1366,9 +1392,10 @@ program
 program
   .command("chat")
   .description("talk to the co-pilot — a REPL over the same loop the TUI uses")
-  .action(async () => {
+  .option(LANG_OPTION[0], LANG_OPTION[1])
+  .action(async (opts: { lang?: string }) => {
     const app = createCliApp();
-    const session = makeSession(app);
+    const session = makeSession(app, opts.lang);
 
     // Piped input: the whole of stdin is one question, so `echo "…" | agentguard chat` works.
     if (!process.stdin.isTTY) {
@@ -1402,10 +1429,11 @@ program
   .description("talk to the co-pilot out loud — microphone in, answers out")
   .option("--speak", "read the answers aloud as well as printing them")
   .option("--seconds <n>", "hard cap on one recording, in seconds", "30")
-  .action(async (opts: { speak?: boolean; seconds: string }) => {
+  .option(LANG_OPTION[0], LANG_OPTION[1])
+  .action(async (opts: { speak?: boolean; seconds: string; lang?: string }) => {
     const app = createCliApp();
     process.exitCode = await runVoiceCli({
-      session: makeSession(app),
+      session: makeSession(app, opts.lang),
       speakReplies: Boolean(opts.speak),
       maxSeconds: Math.max(3, Math.min(120, Number(opts.seconds) || 30)),
     });
@@ -1417,7 +1445,8 @@ program
   .alias("ui")
   .description("open the interactive terminal UI (Ctrl-O to talk to it)")
   .option("--speak", "read replies aloud as well as printing them")
-  .action(async (opts: { speak?: boolean }) => {
+  .option(LANG_OPTION[0], LANG_OPTION[1])
+  .action(async (opts: { speak?: boolean; lang?: string }) => {
     if (!tuiSupported()) {
       process.stderr.write(
         "The interactive TUI needs a real terminal. Try: AGENTGUARD_DEMO=1 agentguard demo run --follow\n",
@@ -1431,6 +1460,7 @@ program
       lab: app.lab,
       dataDir: app.dataDir,
       speakReplies: Boolean(opts.speak),
+      lang: resolveLang(opts.lang ?? process.env.AGENTGUARD_LANG),
     });
   });
 
@@ -1445,6 +1475,7 @@ if (
     lab: app.lab,
     dataDir: app.dataDir,
     speakReplies: process.env.AGENTGUARD_SPEAK === "1",
+    lang: resolveLang(process.env.AGENTGUARD_LANG),
   });
 } else if (process.argv.slice(2).length === 0) {
   process.stdout.write(
@@ -1460,6 +1491,7 @@ if (
       "  agentguard voice [--speak]              out loud on its own — microphone in, answers out",
       "  agentguard                              the War Room TUI — Ctrl-O or /voice to talk to it",
       "  agentguard tui [--speak]                the same, named explicitly",
+      "  --lang en|hinglish|hi                   answer in Hinglish or Hindi (/lang inside the TUI)",
       "  agentguard mission start|status|list|replay <id>",
       "  agentguard swarm [missionId]            stage decisions + blackboard entries",
       "  agentguard demo run [--scenario <id>] [--follow]",

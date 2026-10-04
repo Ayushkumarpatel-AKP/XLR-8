@@ -239,7 +239,7 @@ export async function runVoiceCli(opts: VoiceCliOptions): Promise<number> {
     // Only the model's own sentence is read aloud — never the rendered tables,
     // which would be unlistenable.
     if (opts.speakReplies && spoken) {
-      const result = await whileWorking(stage, "talking", "answering…", speak(spoken));
+      const result = await whileWorking(stage, "talking", "answering…", speak(spoken, opts.session.lang));
       stage.release();
       if (!result.spoken) process.stdout.write(ansi.gray(`  (did not speak: ${result.detail})\n`));
     }

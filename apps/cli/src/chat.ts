@@ -15,6 +15,7 @@ import { noAgentNotice, providerWarning, sandboxNotice } from "./support.js";
 import { failureReason, renderFailure, renderProviderWarning } from "./verify-view.js";
 import { buildAgentTools, type AgentTool } from "./tools.js";
 import { runAgentTurn } from "./agent-loop.js";
+import { LANGS, LANG_LABEL, resolveLang, type Lang } from "./language.js";
 
 /* ------------------------------------------------------------------ *
  * Natural-language layer.
@@ -355,6 +356,8 @@ export class ChatSession {
     private readonly router: ModelRouter,
     /** Where the receipt freshness ledger lives. Omit for an in-memory session. */
     private readonly dataDir?: string,
+    /** Which language the assistant answers in. */
+    public lang: Lang = "en",
   ) {}
 
   /**
@@ -431,6 +434,7 @@ export class ChatSession {
       input,
       ...(opts.onProgress ? { onProgress: opts.onProgress } : {}),
       ...(opts.shouldStop ? { shouldStop: opts.shouldStop } : {}),
+      language: this.lang,
     });
     if (!turn) return null;
 
@@ -488,6 +492,21 @@ export class ChatSession {
   /** Handle one user utterance and return the assistant's reply lines. */
   async handle(rawInput: string): Promise<Line[]> {
     return (await this.ask(rawInput)).lines;
+  }
+
+  /**
+   * Switch the language the assistant answers in.
+   *
+   * Only its own sentences change — numbers, findings, evidence quotes and
+   * commands stay exactly as the engine produced them.
+   */
+  setLang(value: string): { ok: boolean; lang: Lang; detail: string } {
+    const wanted = value.trim().toLowerCase();
+    if (wanted && !LANGS.includes(wanted as Lang)) {
+      return { ok: false, lang: this.lang, detail: `unknown language "${value}" — try ${LANGS.join(", ")}` };
+    }
+    this.lang = resolveLang(wanted);
+    return { ok: true, lang: this.lang, detail: `answers will be in ${LANG_LABEL[this.lang]}` };
   }
 
   private async dispatch(input: string, intent: Intent): Promise<Line[]> {

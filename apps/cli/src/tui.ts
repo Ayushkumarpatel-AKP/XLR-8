@@ -6,6 +6,7 @@ import { SCENARIO_IDS, SCENARIOS, listScenarios, type ScenarioKey } from "@agent
 import { RESET, colourLine, fit, stripAnsi, visibleLength, wrap, type Kind, type Line } from "./kind.js";
 import { renderBanner } from "./banner.js";
 import { ChatSession, classify, type AskOptions } from "./chat.js";
+import { LANG_LABEL, resolveLang, type Lang } from "./language.js";
 import { isDemoAgent, noAgentNotice, providerWarning, sandboxNotice } from "./support.js";
 import { failureReason, renderFailure, renderProviderWarning } from "./verify-view.js";
 import { renderBot, type BotEmotion, type BotState } from "./bot.js";
@@ -52,6 +53,8 @@ export interface TuiContext {
   dataDir: string;
   /** Read replies aloud as well as printing them. */
   speakReplies?: boolean;
+  /** Which language to answer in. Defaults to AGENTGUARD_LANG, then English. */
+  lang?: Lang;
 }
 
 interface SlashCommand {
@@ -232,8 +235,20 @@ export class Tui {
   constructor(ctx: TuiContext) {
     this.ctx = ctx;
     this.menuAll = buildCommands();
-    this.chat = new ChatSession(ctx.engine, ctx.lab, ctx.engine.router, ctx.dataDir);
+    const lang = ctx.lang ?? resolveLang(process.env.AGENTGUARD_LANG);
+    this.chat = new ChatSession(ctx.engine, ctx.lab, ctx.engine.router, ctx.dataDir, lang);
     this.speakReplies = Boolean(ctx.speakReplies);
+  }
+
+  /** `/lang` — switch the language the assistant answers in. */
+  setLang(value: string): void {
+    const result = this.chat.setLang(value);
+    this.say(result.detail, result.ok ? "ok" : "warn");
+    if (result.ok) this.say(`  ${LANG_LABEL[result.lang]} — numbers, findings and quotes stay as the engine produced them.`, "dim");
+  }
+
+  get lang(): Lang {
+    return this.chat.lang;
   }
 
   // ---- public API used by command handlers --------------------------------
@@ -1048,7 +1063,7 @@ export class Tui {
               this.voice.state = "talking";
               this.requestRender();
             }
-            const r = await speak(toSay);
+            const r = await speak(toSay, this.lang);
             if (!r.spoken) this.say(`(could not speak: ${r.detail})`, "warn");
             if (this.voice && !this.voiceBusy) {
               this.voice.state = "idle";
@@ -1266,6 +1281,18 @@ export class Tui {
 
 function buildCommands(): SlashCommand[] {
   const commands: SlashCommand[] = [
+    {
+      name: "lang",
+      args: "[en|hinglish|hi]",
+      description: "which language the assistant answers in (with no argument, shows the current one)",
+      run(arg, app) {
+        if (!arg.trim()) {
+          app.setLang(app.lang);
+          return;
+        }
+        app.setLang(arg.trim());
+      },
+    },
     {
       name: "voice",
       args: "[speak]",

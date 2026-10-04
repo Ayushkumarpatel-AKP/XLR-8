@@ -450,6 +450,32 @@ agentguard voice            # press Enter to speak, Enter again to stop
 agentguard voice --speak    # and it reads the answer back to you
 ```
 
+### Answer in Hindi / Hinglish
+
+```bash
+agentguard ask "kitne agents hain?" --lang hinglish
+agentguard tui --lang hi          # or set AGENTGUARD_LANG, or type /lang in the TUI
+```
+
+```
+$ agentguard ask "how many agents are registered?" --lang hinglish
+  ▸ list_agents()
+Ek agent registered hai — uske 7 tools hain.
+
+AGENTS (1)
+  ▸  acmebank-assistant  AcmeBank AI Assistant  7  ● live
+```
+
+**Only the model's own sentences change.** Numbers, findings, evidence quotes, agent and tool names,
+scenario ids and commands stay exactly as the engine produced them — the prompt says so explicitly,
+because a translated number is a wrong number and a translated quote is no longer evidence. The
+rendered output underneath is untouched, as you can see above.
+
+Spoken replies use a voice for the language where one is installed: on Windows, `Microsoft Hemant` /
+`Kalpana` for Devanagari and `Microsoft Heera` / `Ravi` (Indian English) for romanised Hinglish. If no
+Hindi voice is installed, Devanagari falls back to romanised Hinglish rather than being read out by an
+American voice. `agentguard doctor` reports which voice a reply would use.
+
 Speech in is transcribed by Whisper on the provider you already configured; speech out uses the
 platform's own voice (SAPI on Windows, `say` on macOS, `spd-say`/`espeak` on Linux). On Windows,
 recording needs `ffmpeg` on PATH. `agentguard voice` checks all of this up front and tells you what is

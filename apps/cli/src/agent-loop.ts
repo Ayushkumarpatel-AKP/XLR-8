@@ -1,6 +1,7 @@
 import type { ChatMessage, ModelRouter, ToolSpec } from "@agentguard/model-router";
 import type { Line } from "./kind.js";
 import { toolSpecs, type AgentTool } from "./tools.js";
+import { languageInstruction, type Lang } from "./language.js";
 
 /* ------------------------------------------------------------------ *
  * The LLM layer: the model chooses WHAT to do, the tools do it.
@@ -106,16 +107,21 @@ export async function runAgentTurn(opts: {
   onProgress?: (note: string) => void;
   /** Checked between steps. A turn must never be un-cancellable. */
   shouldStop?: () => boolean;
+  /** Which language the assistant answers in. Only its own sentences; never the data. */
+  language?: Lang;
 }): Promise<AgentTurn | null> {
   const { router, tools, history, input } = opts;
   if (tools.length === 0 || !router.hasToolProvider()) return null;
+
+  const languageNote = languageInstruction(opts.language ?? "en");
+  const systemPrompt = languageNote ? `${AGENT_SYSTEM_PROMPT}\n\n${languageNote}` : AGENT_SYSTEM_PROMPT;
 
   const note = (s: string): void => opts.onProgress?.(s);
   const stopped = (): boolean => opts.shouldStop?.() === true;
 
   const specs: ToolSpec[] = toolSpecs(tools);
   const messages: ChatMessage[] = [
-    { role: "system", content: AGENT_SYSTEM_PROMPT },
+    { role: "system", content: systemPrompt },
     ...history.slice(-8).map((h) => ({ role: h.role, content: h.text }) as ChatMessage),
     { role: "user", content: input },
   ];
